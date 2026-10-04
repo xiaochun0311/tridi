@@ -105,6 +105,11 @@ class Trainer:
         THR = self.cfg.train.loss_t_stamp_threshold
 
         for key, weight in self.cfg.train.losses.items():
+            if key in {"smpl_v2v", "obj_v2v", "sbj_contacts"}:
+                times = output.timesteps_obj if key == "obj_v2v" else output.timesteps_sbj
+                if not (times <= THR).any():
+                    wandb_log[f'loss/{key}'] = 0.0
+                    continue
             if key == "smpl_v2v":
                 mask = (output.timesteps_sbj <= THR)
 

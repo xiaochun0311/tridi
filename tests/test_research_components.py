@@ -1,5 +1,7 @@
 import torch
+from types import SimpleNamespace
 
+from tridi.core.trainer import Trainer
 from tridi.model.denoising.transformer_uni_3 import TransformertUni3WayModel
 
 
@@ -19,5 +21,18 @@ def test_geometry_adapter_starts_at_baseline():
     torch.testing.assert_close(output_with_geometry, output_without_geometry)
 
 
+def test_empty_low_noise_batch_has_finite_loss():
+    trainer = object.__new__(Trainer)
+    trainer.cfg = SimpleNamespace(train=SimpleNamespace(
+        loss_t_stamp_threshold=250,
+        losses={"smpl_v2v": 30.0, "obj_v2v": 10.0, "sbj_contacts": 20.0, "denoise_1": 1.0},
+    ))
+    output = SimpleNamespace(timesteps_sbj=torch.tensor([900]), timesteps_obj=torch.tensor([900]))
+    loss, log = trainer.compute_loss(None, output, {"denoise_1": torch.tensor(2.0)})
+    assert float(loss) == 2.0
+    assert all(value == value for value in log.values())
+
+
 if __name__ == "__main__":
     test_geometry_adapter_starts_at_baseline()
+    test_empty_low_noise_batch_has_finite_loss()
