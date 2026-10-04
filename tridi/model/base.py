@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 import torch
+from torch import nn
 from diffusers import ModelMixin
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
@@ -100,6 +101,10 @@ class BaseTriDiModel(ModelMixin):
         cg_scale: float = 0.0,
         cg_t_stamp: int = 200,
         cg_penetration_weight: float = 0.0,
+        landing_step: float = 0.0,
+        landing_t_stamp: int = 200,
+        joint_manifold_dim: int = 0,
+        manifold_projection_strength: float = 0.0,
     ):
         super().__init__()
 
@@ -108,6 +113,13 @@ class BaseTriDiModel(ModelMixin):
         self.cg_scale = cg_scale
         self.cg_t_stamp = cg_t_stamp
         self.cg_penetration_weight = cg_penetration_weight
+        self.landing_step = landing_step
+        self.landing_t_stamp = landing_t_stamp
+        self.manifold_projection_strength = manifold_projection_strength
+        if joint_manifold_dim > 0:
+            joint_dim = data_sbj_channels + data_contact_channels
+            self.joint_encoder = nn.Sequential(nn.Linear(joint_dim, 256), nn.SiLU(), nn.Linear(256, joint_manifold_dim))
+            self.joint_decoder = nn.Sequential(nn.Linear(joint_manifold_dim, 256), nn.SiLU(), nn.Linear(256, joint_dim))
 
         # Input size
         # sbj_shape, sbj_global_pose, sbj_pose, sbj_c, obj_pose

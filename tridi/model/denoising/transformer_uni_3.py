@@ -51,6 +51,7 @@ class TransformertUni3WayModel(nn.Module):
         num_layers: int = 4,
         nhead: int = 8,
         dim_feedforward: int = 512,
+        use_geometry: bool = False,
     ):
         super().__init__()
         self.dim_sbj = dim_sbj
@@ -61,6 +62,7 @@ class TransformertUni3WayModel(nn.Module):
         self.dim_output = dim_output
         self.dim_timestep_embed = dim_timestep_embed
         self.num_layers = num_layers
+        self.use_geometry = use_geometry
 
         # Time projection function
         self.projection_T = Projection(self.dim_timestep_embed, self.dim_hidden)
@@ -101,6 +103,12 @@ class TransformertUni3WayModel(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, num_layers=num_layers
         )
+        if use_geometry:
+            self.geometry_projection = nn.Linear(3, dim_hidden)
+            self.geometry_attention = nn.MultiheadAttention(dim_hidden, nhead, batch_first=True)
+            self.geometry_gate = nn.Parameter(torch.zeros(()))
+            self.kinematic_attention = nn.MultiheadAttention(dim_hidden, nhead, batch_first=True)
+            self.kinematic_gate = nn.Parameter(torch.zeros(()))
 
         # Decoders
         self.decoder_S_shape = Projection(dim_hidden, 10)
@@ -169,7 +177,7 @@ class TransformertUni3WayModel(nn.Module):
 
         return sbj, obj, cnt
 
-    def forward(self, sbj, obj, contact, cond, t1, t2, t3):
+    def forward(self, sbj, obj, contact, cond, t1, t2, t3, geometry=None):
         t_1, t_2, t_3 = self.prepare_time(t1, t2, t3, sbj.device)
         sbj = self.prepare_sbj(sbj)
         obj = self.prepare_obj(obj)
@@ -178,7 +186,20 @@ class TransformertUni3WayModel(nn.Module):
 
         x = torch.cat([sbj, obj, cnt, cond, t_1, t_2, t_3], dim=1)
         x = self.layernorm(x)
-        x = self.transformer_encoder(x)
+        if self.use_geometry:
+            if geometry is None:
+                raise ValueError("Object geometry is required when use_geometry=True")
+            memory = self.geometry_projection(geometry)
+            for layer in self.transformer_encoder.layers:
+                x = layer(x)
+                local, _ = self.geometry_attention(x[:, :7], memory, memory, need_weights=False)
+                x = torch.cat([x[:, :7] + self.geometry_gate * local, x[:, 7:]], dim=1)
+                harmony, _ = self.kinematic_attention(x[:, :4], x[:, 4:7], x[:, 4:7], need_weights=False)
+                x = torch.cat([x[:, :4] + self.kinematic_gate * harmony, x[:, 4:]], dim=1)
+            if self.transformer_encoder.norm is not None:
+                x = self.transformer_encoder.norm(x)
+        else:
+            x = self.transformer_encoder(x)
 
         sbj, obj, contact = self.unembed_prediction(x)
 

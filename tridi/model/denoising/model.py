@@ -39,7 +39,8 @@ class DenoisingModel(ModelMixin):
             inputs: Tensor,
             t: Tensor,
             t_obj: Optional[Tensor] = None,
-            t_contact: Optional[Tensor] = None
+            t_contact: Optional[Tensor] = None,
+            geometry: Optional[Tensor] = None,
     ) -> Tensor:
         """ Receives input of shape (B, in_channels) and returns output
             of shape (B, out_channels) """
@@ -50,7 +51,7 @@ class DenoisingModel(ModelMixin):
                     [self.model.dim_sbj, self.model.dim_obj, self.model.dim_contact, self.model.dim_cond],
                     dim=1
                 )
-            return self.model(sbj, obj, contact, cond, t, t_obj, t_contact)
+            return self.model(sbj, obj, contact, cond, t, t_obj, t_contact, geometry=geometry)
         else:
             with self.autocast_context:
                 return self.model(inputs, t)

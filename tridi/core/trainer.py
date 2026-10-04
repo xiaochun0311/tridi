@@ -147,7 +147,7 @@ class Trainer:
                 pred_contacts = pred_contacts.min(dim=-1).values
                 gt_contacts = batch.sbj_contacts_full[mask.cpu()].to(output.sbj_vertices.device)
                 loss_i = F.mse_loss(pred_contacts, gt_contacts, reduction='none')
-            elif key.startswith("denoise"):
+            elif key.startswith("denoise") or key.startswith("manifold_"):
                 loss_i = denoise_loss[key]
             else:
                 raise NotImplementedError(f"No implementation for {key} loss.")

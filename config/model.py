@@ -42,4 +42,8 @@ class TriDiModelConfig:
     cg_scale: float = 0.0
     cg_t_stamp: int = 200
     cg_penetration_weight: float = 0.0
+    landing_step: float = 0.0
+    landing_t_stamp: int = 200
+    joint_manifold_dim: int = 0
+    manifold_projection_strength: float = 0.0
 # ============================================================

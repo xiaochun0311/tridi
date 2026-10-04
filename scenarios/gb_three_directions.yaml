@@ -1,0 +1,14 @@
+# Experimental continuation of gb_main.yaml; load this file after gb_main.yaml.
+model_denoising:
+  params:
+    use_geometry: true
+model:
+  joint_manifold_dim: 64
+  # Enable projection only after training the joint encoder/decoder.
+  manifold_projection_strength: 0.0
+  landing_step: 0.01
+  cg_penetration_weight: 1.0
+train:
+  losses:
+    manifold_reconstruction: 1.0
+    manifold_projection: 0.1

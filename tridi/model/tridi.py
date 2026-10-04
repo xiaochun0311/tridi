@@ -47,6 +47,17 @@ class TriDiModel(BaseTriDiModel):
             torch.stack([trange, tzeros, tzeros], dim=1),
         ])
 
+    def get_object_geometry(self, obj_class):
+        if not self.denoising_model.model.use_geometry:
+            return None
+        points = []
+        for class_id in obj_class.detach().cpu().tolist():
+            keypoints = self.mesh_model.canonical_obj_keypoints_th[int(class_id)]
+            indices = torch.linspace(0, len(keypoints) - 1, 32, device=keypoints.device).long()
+            selected = keypoints[indices]
+            points.append(selected - selected.mean(dim=0, keepdim=True))
+        return torch.stack(points)
+
     def forward_train(
         self,
         sbj: Tensor,
@@ -95,7 +106,10 @@ class TriDiModel(BaseTriDiModel):
 
         # Forward
         if self.denoise_mode == 'sample':
-            x_0_pred = self.denoising_model(x_t_input, timestep_sbj, timestep_obj, timestep_contact)
+            x_0_pred = self.denoising_model(
+                x_t_input, timestep_sbj, timestep_obj, timestep_contact,
+                geometry=self.get_object_geometry(obj_class)
+            )
 
             # Check
             assert x_0_pred.shape == x_0.shape, f'Input prediction {x_0_pred.shape=} and {x_0.shape=}'
@@ -108,6 +122,14 @@ class TriDiModel(BaseTriDiModel):
                 "denoise_2": F.l1_loss(x_0_pred_obj, obj),
                 "denoise_3": F.mse_loss(x_0_pred_contact, contact)
             }
+            if hasattr(self, "joint_encoder"):
+                joint_gt = torch.cat([sbj, contact], dim=1)
+                joint_pred = torch.cat([x_0_pred_sbj, x_0_pred_contact], dim=1)
+                loss["manifold_reconstruction"] = F.mse_loss(
+                    self.joint_decoder(self.joint_encoder(joint_gt)), joint_gt
+                )
+                projected = self.joint_decoder(self.joint_encoder(joint_pred))
+                loss["manifold_projection"] = F.mse_loss(joint_pred, projected.detach())
 
             # Auxiliary output
             aux_output = (x_0, x_t, noise, x_0_pred, timestep_sbj, timestep_obj, timestep_contact)
@@ -275,6 +297,7 @@ class TriDiModel(BaseTriDiModel):
             obj_group = batch.obj_group.to(device)
         if self.conditioning_model.use_pointnext_conditioning:
             obj_pointnext = batch.obj_pointnext.to(device)
+        geometry = self.get_object_geometry(batch.obj_class)
 
         # Loop over timesteps
         all_outputs = []
@@ -297,7 +320,8 @@ class TriDiModel(BaseTriDiModel):
                 )
                 # Forward (pred is either noise or x_0)
                 _pred = self.denoising_model(
-                    x_t_input, t_sbj.reshape(1).expand(B), t_obj.reshape(1).expand(B), t_contact.reshape(1).expand(B)
+                    x_t_input, t_sbj.reshape(1).expand(B), t_obj.reshape(1).expand(B), t_contact.reshape(1).expand(B),
+                    geometry=geometry
                 )
 
             # Step
@@ -328,6 +352,32 @@ class TriDiModel(BaseTriDiModel):
             x_t = torch.cat(x_t, dim=1)
 
             x_t = scheduler.step(pred, t, x_t, **extra_step_kwargs).prev_sample
+            if self.landing_step > 0 and t < self.landing_t_stamp:
+                # A single constraint-gradient landing step; this is not Jeon et al.'s full sampler.
+                offset = 0
+                state_parts = []
+                for sampled, size, conditioned in zip(
+                    mode, (D_sbj, D_obj, D_contact),
+                    (x_sbj_cond, x_obj_cond, x_contact_cond)
+                ):
+                    state_parts.append(x_t[:, offset:offset + size] if sampled == "1" else conditioned)
+                    if sampled == "1":
+                        offset += size
+                full_state = torch.cat(state_parts, dim=1)
+                x_t = x_t + self.landing_step * self.get_prediction_from_cg(
+                    mode, full_state, x_sbj_cond, x_obj_cond, x_contact_cond, batch, t
+                )
+            if self.manifold_projection_strength > 0 and t < self.landing_t_stamp:
+                if not hasattr(self, "joint_encoder"):
+                    raise ValueError("manifold_projection_strength requires joint_manifold_dim > 0")
+                sbj_state = x_t[:, :D_sbj] if mode[0] == "1" else x_sbj_cond
+                contact_state = x_t[:, -D_contact:] if mode[2] == "1" else x_contact_cond
+                joint_state = torch.cat([sbj_state, contact_state], dim=1)
+                projected = self.joint_decoder(self.joint_encoder(joint_state))
+                if mode[0] == "1":
+                    x_t[:, :D_sbj] = torch.lerp(sbj_state, projected[:, :D_sbj], self.manifold_projection_strength)
+                if mode[2] == "1":
+                    x_t[:, -D_contact:] = torch.lerp(contact_state, projected[:, D_sbj:], self.manifold_projection_strength)
 
             # Append to output list if desired
             if (return_all_outputs and (i % return_sample_every_n_steps == 0 or i == len(scheduler.timesteps) - 1)):
