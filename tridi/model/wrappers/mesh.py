@@ -42,11 +42,17 @@ class MeshModel:
                 self.canonical_obj_keypoints[class_id]["cartesian"], dtype=torch.float,
                 requires_grad=False, device=device
             )
-            # Some keypoint files contain positions only; normals are optional here.
             if "normals" in self.canonical_obj_keypoints[class_id]:
+                normals = self.canonical_obj_keypoints[class_id]["normals"]
+            elif "triangles_ids" in self.canonical_obj_keypoints[class_id]:
+                normals = self.canonical_obj_meshes[class_id].face_normals[
+                    self.canonical_obj_keypoints[class_id]["triangles_ids"]
+                ]
+            else:
+                normals = None
+            if normals is not None:
                 self.canonical_obj_normals_th[class_id] = torch.tensor(
-                    self.canonical_obj_keypoints[class_id]["normals"], dtype=torch.float,
-                    requires_grad=False, device=device
+                    normals, dtype=torch.float, requires_grad=False, device=device
                 )
         canonical_obj_pcs: Dict[int, torch.Tensor] = {}
         for class_id in class_ids:

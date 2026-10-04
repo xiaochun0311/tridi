@@ -41,4 +41,5 @@ class TriDiModelConfig:
     cg_apply: bool = False
     cg_scale: float = 0.0
     cg_t_stamp: int = 200
+    cg_penetration_weight: float = 0.0
 # ============================================================

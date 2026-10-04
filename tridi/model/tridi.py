@@ -9,9 +9,19 @@ from torch import Tensor
 from tqdm import tqdm
 
 from tridi.data.batch_data import BatchData
+from tridi.utils.geometry import rotation_6d_to_matrix
 from .base import BaseTriDiModel, TriDiModelOutput
 
 logger = getLogger(__name__)
+
+
+def _penetration_loss(vertices, obj_keypoints, obj_normals, nearest, distances):
+    nearest_index = nearest.unsqueeze(-1).expand(-1, -1, 3)
+    nearest_points = torch.gather(obj_keypoints, 1, nearest_index)
+    nearest_normals = torch.gather(obj_normals, 1, nearest_index)
+    signed_gap = ((vertices - nearest_points) * nearest_normals).sum(-1)
+    # ponytail: nearest-point normals approximate the surface; use triangle distance if this fails on concave objects.
+    return (F.relu(-signed_gap) * (distances < 0.05)).mean(-1).sum()
 
 
 class TriDiModel(BaseTriDiModel):
@@ -145,8 +155,9 @@ class TriDiModel(BaseTriDiModel):
             # estimated contacts from smpl and obj
             contact_indexes = batch.sbj_contact_indexes.to(device)
             pred_contact_vertices = sbj_vertices[:, contact_indexes[0]]
-            pred_contacts = torch.cdist(pred_contact_vertices, obj_keypoints, p=2)  # B x Cont X N_obj
-            pred_contacts = torch.min(pred_contacts, dim=-1).values
+            pred_contacts, nearest = torch.cdist(
+                pred_contact_vertices, obj_keypoints, p=2
+            ).min(dim=-1)
 
             # decode them to a contact map
             if mode[2] == "1":
@@ -166,6 +177,16 @@ class TriDiModel(BaseTriDiModel):
                 reduction="none"
             )
             guidance_loss = guidance_loss.mean(-1).sum()
+            if self.cg_penetration_weight > 0:
+                normals = torch.stack([
+                    self.mesh_model.canonical_obj_normals_th[int(c)]
+                    for c in batch.obj_class.detach().cpu().tolist()
+                ])
+                obj_R = rotation_6d_to_matrix(split_output.obj_R)
+                normals = torch.bmm(normals, obj_R.transpose(1, 2))
+                guidance_loss = guidance_loss + self.cg_penetration_weight * _penetration_loss(
+                    pred_contact_vertices, obj_keypoints, normals, nearest, pred_contacts
+                )
             guidance_loss.backward()
             torch.nn.utils.clip_grad_norm_(output, 50)
             _grad = -output.grad

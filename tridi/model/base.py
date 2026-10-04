@@ -99,6 +99,7 @@ class BaseTriDiModel(ModelMixin):
         cg_apply: bool = False,
         cg_scale: float = 0.0,
         cg_t_stamp: int = 200,
+        cg_penetration_weight: float = 0.0,
     ):
         super().__init__()
 
@@ -106,6 +107,7 @@ class BaseTriDiModel(ModelMixin):
         self.cg_apply = cg_apply
         self.cg_scale = cg_scale
         self.cg_t_stamp = cg_t_stamp
+        self.cg_penetration_weight = cg_penetration_weight
 
         # Input size
         # sbj_shape, sbj_global_pose, sbj_pose, sbj_c, obj_pose
