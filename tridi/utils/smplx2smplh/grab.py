@@ -7,7 +7,10 @@ import tqdm
 import smplx
 import numpy as np
 import trimesh
-import open3d as o3d
+try:
+    import open3d as o3d
+except ImportError:
+    o3d = None
 from loguru import logger
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -140,7 +143,7 @@ def run_smplx2smplh_conversion(dataset, seq_info, cfg):
     }
 
     sbj_model = smplx.build_layer(
-        model_path=str(cfg.model_path), model_type="smplh", gender=seq_data['gender'], 
+        model_path=str(cfg.model_path), model_type="smplh", gender=seq_info['gender'], 
         num_betas=10, batch_size=cfg.batch_size, num_pca_comps=12, use_pca=False, use_compressed=False
     ).to(device)
 
@@ -248,6 +251,9 @@ if __name__ == "__main__":
             cfg.grab_path / "grab_smplh" / f"{seq_info['sbj_id']}" / \
             f"{seq_info['obj_name']}_{seq_info['action']}"
         seq_info["output_seq_path"].mkdir(exist_ok=True, parents=True)
+        # resume: skip sequences already converted
+        if (seq_info["output_seq_path"] / "sequence_data.pkl").is_file():
+            continue
 
         frame_mask, faces, verts = create_smplx_meshes(seq_data, cfg)
         seq_info["frame_mask"] = frame_mask

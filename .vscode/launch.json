@@ -1,0 +1,59 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "TriDi 训练单步调试 (GPU0)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled",
+        "CUDA_VISIBLE_DEVICES": "0"
+      },
+      "args": [
+        "-c", "config/env.yaml", "scenarios/gb_main.yaml", "--",
+        "run.job=train",
+        "run.name=debug_train",
+        "dataloader.batch_size=16",
+        "dataloader.workers=0",
+        "train.max_steps=10",
+        "logging.wandb=False",
+        "behave.train_split_file=assets/behave_train_available.json",
+        "behave.test_split_file=assets/behave_test_available.json"
+      ]
+    },
+    {
+      "name": "TriDi 训练单步调试 (GPU0, taskset兜底)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.vscode/python-debug.sh",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled",
+        "CUDA_VISIBLE_DEVICES": "0"
+      },
+      "args": [
+        "-c", "config/env.yaml", "scenarios/gb_main.yaml", "--",
+        "run.job=train",
+        "run.name=debug_train",
+        "dataloader.batch_size=16",
+        "dataloader.workers=0",
+        "train.max_steps=10",
+        "logging.wandb=False",
+        "behave.train_split_file=assets/behave_train_available.json",
+        "behave.test_split_file=assets/behave_test_available.json"
+      ]
+    }
+  ]
+}

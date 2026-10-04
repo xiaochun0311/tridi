@@ -4,6 +4,7 @@
 experiments/
 visualization/
 .ipynb_checkpoints
+data
 
 *.ply
 *.png

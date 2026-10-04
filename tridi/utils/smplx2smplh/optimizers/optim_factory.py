@@ -21,8 +21,6 @@ from typing import NewType, List, Dict
 import torch
 import torch.optim as optim
 from loguru import logger
-from torchtrustncg import TrustRegion
-
 Tensor = NewType('Tensor', torch.Tensor)
 
 
@@ -46,6 +44,12 @@ def build_optimizer(parameters: List[Tensor],
         optimizer = optim.LBFGS(parameters, **optim_cfg.get('lbfgs', {}))
         create_graph = False
     elif optim_type == 'trust_ncg' or optim_type == 'trust-ncg':
+        try:
+            from torchtrustncg import TrustRegion
+        except ImportError as exc:
+            raise ImportError(
+                "The trust_ncg optimizer requires the optional torchtrustncg package."
+            ) from exc
         optimizer = TrustRegion(
             parameters, **optim_cfg.get('trust_ncg', {}))
         create_graph = True

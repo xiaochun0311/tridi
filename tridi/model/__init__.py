@@ -13,9 +13,9 @@ def get_model(cfg: ProjectConfig):
     # main model
     if cfg.model_denoising.name.endswith("unidiffuser_3"):
         model = TriDiModel(
-            **OmegaConf.to_container(cfg.model, resolve=True),
-            denoising_model_config=cfg.model_denoising,
-            conditioning_model_config=cfg.model_conditioning
+            **OmegaConf.to_container(cfg.model, resolve=True), # **表示字典展开 # 扩散模型基本配置
+            denoising_model_config=cfg.model_denoising, # 去噪网络的配置
+            conditioning_model_config=cfg.model_conditioning # 条件信息的配置
         )
     else:
         raise NotImplementedError(f"Invalid model: {cfg.model_denoising.name}")

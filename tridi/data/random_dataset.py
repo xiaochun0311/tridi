@@ -45,7 +45,9 @@ class RandomDataset:
         self.classid2obj = {i: obj for obj, i in self.obj2classid.items()}
 
         # Determine number of classes
-        unique_classes = np.sort(np.unique(list(self.obj2classid.values())))
+        unique_classes = np.sort(np.unique([
+            self.obj2classid[obj] for obj in self.objects
+        ]))
         num_classes = len(unique_classes)
 
         # Sample target class

@@ -35,30 +35,24 @@ class MeshModel:
         self.canonical_obj_meshes = canonical_obj_meshes
         self.canonical_obj_keypoints = canonical_obj_keypoints
         class_ids = sorted(self.canonical_obj_keypoints.keys())
-        self.canonical_obj_keypoints_th = []
-        self.canonical_obj_normals_th = []
+        self.canonical_obj_keypoints_th = {}
+        self.canonical_obj_normals_th = {}
         for class_id in class_ids:
-            self.canonical_obj_keypoints_th.append(
-                self.canonical_obj_keypoints[class_id]["cartesian"]
+            self.canonical_obj_keypoints_th[class_id] = torch.tensor(
+                self.canonical_obj_keypoints[class_id]["cartesian"], dtype=torch.float,
+                requires_grad=False, device=device
             )
-            self.canonical_obj_normals_th.append(
-                self.canonical_obj_keypoints[class_id]["normals"]
-            )
-        self.canonical_obj_keypoints_th = torch.tensor(
-            np.stack(self.canonical_obj_keypoints_th, axis=0), dtype=torch.float,
-            requires_grad=False, device=device
-        )
-        self.canonical_obj_normals_th = torch.tensor(
-            np.stack(self.canonical_obj_normals_th, axis=0), dtype=torch.float,
-            requires_grad=False, device=device
-        )
-        canonical_obj_pcs: List[torch.Tensor] = []
-        for class_id in class_ids:
-            canonical_obj_pcs.append(
-                torch.tensor(
-                    self.canonical_obj_meshes[class_id].vertices,
-                    dtype=torch.float, requires_grad=False, device=device
+            # Some keypoint files contain positions only; normals are optional here.
+            if "normals" in self.canonical_obj_keypoints[class_id]:
+                self.canonical_obj_normals_th[class_id] = torch.tensor(
+                    self.canonical_obj_keypoints[class_id]["normals"], dtype=torch.float,
+                    requires_grad=False, device=device
                 )
+        canonical_obj_pcs: Dict[int, torch.Tensor] = {}
+        for class_id in class_ids:
+            canonical_obj_pcs[class_id] = torch.tensor(
+                self.canonical_obj_meshes[class_id].vertices,
+                dtype=torch.float, requires_grad=False, device=device
             )
         self.canonical_obj_pcs = canonical_obj_pcs
 
@@ -159,7 +153,10 @@ class MeshModel:
         # obj mesh
         obj_R = output.obj_R.reshape(B, 1, 6)
         obj_R = rotation_6d_to_matrix(obj_R).reshape(B, 3, 3)
-        obj_keypoints = torch.clone(self.canonical_obj_keypoints_th[obj_class]) # B x n_points x 3
+        obj_keypoints = torch.stack([
+            self.canonical_obj_keypoints_th[int(class_id)].clone()
+            for class_id in obj_class.detach().cpu().tolist()
+        ])
 
         # Pose object
         obj_keypoints = torch.bmm(obj_R, obj_keypoints.transpose(2, 1)).transpose(2, 1)
@@ -184,7 +181,18 @@ class MeshModel:
     def to(self, device):
         self.smpl_f = self.smpl_f.to(device)
         self.smpl_m = self.smpl_m.to(device)
-        self.canonical_obj_keypoints_th = self.canonical_obj_keypoints_th.to(device)
+        self.canonical_obj_keypoints_th = {
+            class_id: keypoints.to(device)
+            for class_id, keypoints in self.canonical_obj_keypoints_th.items()
+        }
+        self.canonical_obj_normals_th = {
+            class_id: normals.to(device)
+            for class_id, normals in self.canonical_obj_normals_th.items()
+        }
+        self.canonical_obj_pcs = {
+            class_id: vertices.to(device)
+            for class_id, vertices in self.canonical_obj_pcs.items()
+        }
 
         self.device = device
 
@@ -223,13 +231,17 @@ class MeshModel:
             sbj_global = body_model_params['sbj_global'].reshape(B, 1, 6)
             sbj_global = rotation_6d_to_matrix(sbj_global).reshape(B, 1, 9).float()
 
+            # SMPL-H 人体骨架是这样定义的：1 个根关节、21 个身体关节，以及左右手各 15 个关节
+            # 1 个根关节：控制整个人的朝向，单独存为 sbj_global。
+            # 21 个身体关节：控制躯干、头、手臂、腿等，存为 body_pose。
+            # 左手 15 个＋右手 15 个：每只手有 5 根手指，每根手指用 3 个关节旋转表示，分别存为 left_hand_pose、right_hand_pose。
             body_model_params = {
-                "betas": body_model_params['sbj_shape'],
-                "transl": body_model_params['sbj_c'],
-                "global_orient": sbj_global,
-                "body_pose": sbj_pose[:, :21],
-                "left_hand_pose": sbj_pose[:, 21:36],
-                "right_hand_pose": sbj_pose[:, 36:]
+                "betas": body_model_params['sbj_shape'], # 体型
+                "transl": body_model_params['sbj_c'], # 人物位置
+                "global_orient": sbj_global, # 朝向
+                "body_pose": sbj_pose[:, :21], # 21个身体关节
+                "left_hand_pose": sbj_pose[:, 21:36], # 左手15个关节
+                "right_hand_pose": sbj_pose[:, 36:] #右手15个关节
             }
         B = min(self.batch_size, len(body_model_params['betas']))
         body_model_params = {k: v.to(self.device) for k, v in body_model_params.items()}
@@ -247,7 +259,7 @@ class MeshModel:
                 sbj_joints = sbj_output['joints']
             else:  # mixed
                 body_model_params_m = {k: v[sbj_gender] for k, v in body_model_params.items()}
-                body_model_params_f = {k: v[~sbj_gender] for k, v in body_model_params.items()}
+                body_model_params_f = {k: v[~sbj_gender] for k, v in body_model_params.items()} # ～按位取反
 
                 sbj_output_m = self.smpl_m(
                     pose2rot=False, get_skin=True, return_full_pose=True, **body_model_params_m
@@ -279,4 +291,3 @@ class MeshModel:
         sbj_vertices, sbj_joints = self.get_smpl_th(body_model_params, sbj_gender)
 
         return sbj_vertices.cpu().numpy(), sbj_joints.cpu().numpy()
-

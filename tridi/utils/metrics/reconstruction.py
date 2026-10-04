@@ -105,8 +105,8 @@ def get_contact_similarity_sampled_sbj(
     T = sampled_sbj_v.shape[0]
     B = 50
 
-    gt_obj_v = torch.from_numpy(gt_obj_v).cuda()
-    gt_sbj_v = torch.from_numpy(gt_sbj_v).cuda()
+    gt_obj_v = torch.from_numpy(gt_obj_v).to(METRICS_DEVICE)
+    gt_sbj_v = torch.from_numpy(gt_sbj_v).to(METRICS_DEVICE)
 
     gt_input_data = [{
         "obj_verts": gt_obj_v[t : min(t + B, T)],
@@ -116,7 +116,7 @@ def get_contact_similarity_sampled_sbj(
 
     gt_contacts_mask = [contacts_worker(**gt_input_data[t]) for t in range(len(gt_input_data))]
     gt_contacts_mask = np.concatenate(gt_contacts_mask, axis=0)
-    sampled_sbj_v = torch.from_numpy(sampled_sbj_v).cuda()
+    sampled_sbj_v = torch.from_numpy(sampled_sbj_v).to(METRICS_DEVICE)
 
     pred_input_data = [{
         "obj_verts": gt_obj_v[t : min(t + B, T)],
@@ -204,8 +204,8 @@ def get_contact_similarity_sampled_obj(
     T = sampled_obj_v.shape[0]
     B = 50
 
-    gt_obj_v = torch.from_numpy(gt_obj_v).cuda()
-    gt_sbj_v = torch.from_numpy(gt_sbj_v).cuda()
+    gt_obj_v = torch.from_numpy(gt_obj_v).to(METRICS_DEVICE)
+    gt_sbj_v = torch.from_numpy(gt_sbj_v).to(METRICS_DEVICE)
 
     gt_input_data = [{
         "obj_verts": gt_obj_v[t : min(t + B, T)],
@@ -216,7 +216,7 @@ def get_contact_similarity_sampled_obj(
     gt_contacts_mask = [contacts_worker(**gt_input_data[t]) for t in range(len(gt_input_data))]
     gt_contacts_mask = np.concatenate(gt_contacts_mask, axis=0)
 
-    sampled_obj_v = torch.from_numpy(sampled_obj_v).cuda()
+    sampled_obj_v = torch.from_numpy(sampled_obj_v).to(METRICS_DEVICE)
 
     pred_input_data = [{
         "obj_verts": sampled_obj_v[t : min(t + B, T)],
@@ -244,8 +244,8 @@ def get_contact_similarity_sampled_sbjobj(
     T = sampled_obj_v.shape[0]
     B = 50
     # Get gt contacts
-    gt_obj_v = torch.from_numpy(gt_obj_v).cuda()
-    gt_sbj_v = torch.from_numpy(gt_sbj_v).cuda()
+    gt_obj_v = torch.from_numpy(gt_obj_v).to(METRICS_DEVICE)
+    gt_sbj_v = torch.from_numpy(gt_sbj_v).to(METRICS_DEVICE)
 
     gt_input_data = [{
         "obj_verts": gt_obj_v[t : min(t + B, T)],
@@ -258,8 +258,8 @@ def get_contact_similarity_sampled_sbjobj(
     gt_contacts_mask = np.concatenate(gt_contacts_mask, axis=0)
 
     # Get sampled contacts
-    sampled_obj_v = torch.from_numpy(sampled_obj_v).cuda()
-    sampled_sbj_v = torch.from_numpy(sampled_sbj_v).cuda()
+    sampled_obj_v = torch.from_numpy(sampled_obj_v).to(METRICS_DEVICE)
+    sampled_sbj_v = torch.from_numpy(sampled_sbj_v).to(METRICS_DEVICE)
 
     pred_input_data = [{
         "obj_verts": sampled_obj_v[t : min(t + B, T)],
@@ -363,3 +363,4 @@ def get_obj_metrics(
     obj_contact_diffused = np.concatenate(obj_contact_diffused, 0) if len(obj_contact_diffused) > 0 else [0]
 
     return obj_v2v, obj_center_distance, obj_contact_mesh, obj_contact_diffused
+METRICS_DEVICE = torch.device("cuda")

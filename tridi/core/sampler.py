@@ -117,7 +117,13 @@ class Sampler:
             elif self.cfg.model_conditioning.use_contacts != "NONE":
                 raise ValueError(f"Unsupported contact conditioning {self.cfg.model_conditioning.use_contacts}")
 
-        output = self.model(batch, "sample", sample_type=self.cfg.sample.mode)
+        output = self.model(
+            batch,
+            "sample",
+            sample_type=self.cfg.sample.mode,
+            scheduler=self.cfg.sample.c,
+            num_inference_steps=self.cfg.sample.num_inference_steps,
+        )
 
         if isinstance(output, tuple):
             output, intermediate_outputs = output

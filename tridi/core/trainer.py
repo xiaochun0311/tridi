@@ -77,7 +77,7 @@ class Trainer:
             batch.sbj_joints = gt_sbj_joints
 
             # get gt contacts
-            sbj_contacts, sbj_contacts_full, captions = self.contact_model.encode_contacts(
+            sbj_contacts, sbj_contacts_full, captions = self.contact_model.encode_contacts(# 使用采样的接触信息训练神经网络
                 batch.sbj_vertices, batch.sbj_contact_indexes, batch.obj_keypoints,
                 batch.obj_class, batch.obj_R,
                 enc_type=self.contacts_enc_dec, obj_name=batch.obj
@@ -196,80 +196,82 @@ class Trainer:
         torch.save(checkpoint_dict, checkpoint_path)
         logger.info(f'Saved checkpoint to {checkpoint_path}')
 
-    def train(self):
-        total_batch_size = self.cfg.dataloader.batch_size
+    def train(self):  # 控制整个训练过程：重复训练和验证，直到达到最大训练步数。
+        total_batch_size = self.cfg.dataloader.batch_size  # 记录当前配置的单批样本数，用于启动日志。
 
         # Log info
-        logger.info(
-            f'***** Starting training *****\n'
-            f'    Number of classes: {len(self.mesh_model.canonical_obj_keypoints.keys()):_}\n'
-            f'    Dataset train size: {len(self.dataloader_train.dataset):_}\n'
-            f'    Dataset val size: {len(self.dataloader_val.dataset):_}\n'
-            f'    Dataloader train size: {len(self.dataloader_train):_}\n'
-            f'    Dataloader val size: {len(self.dataloader_val):_}\n'
-            f'    Batch size per device = {self.cfg.dataloader.batch_size}\n'
-            f'    Total train batch size (w. parallel, dist & accum) = {total_batch_size}\n'
-            f'    Gradient Accumulation steps = {self.cfg.optimizer.gradient_accumulation_steps}\n'
-            f'    Max training steps = {self.cfg.train.max_steps}\n'
-            f'    Training state = {self.train_state}'
-        )
+        logger.info(  # 将下面拼接的多行信息写入日志。
+            f'***** Starting training *****\n'  # 日志标题；\n 表示换行。
+            f'    Number of classes: {len(self.mesh_model.canonical_obj_keypoints.keys()):_}\n'  # 物体类别数。
+            f'    Dataset train size: {len(self.dataloader_train.dataset):_}\n'  # 训练集样本数。
+            f'    Dataset val size: {len(self.dataloader_val.dataset):_}\n'  # 验证集样本数。
+            f'    Dataloader train size: {len(self.dataloader_train):_}\n'  # 每轮训练包含的批次数。
+            f'    Dataloader val size: {len(self.dataloader_val):_}\n'  # 每轮验证包含的批次数。
+            f'    Batch size per device = {self.cfg.dataloader.batch_size}\n'  # 当前设备每批读取的样本数。
+            f'    Total train batch size (w. parallel, dist & accum) = {total_batch_size}\n'  # 这里显示的仍是上面的 batch_size。
+            f'    Gradient Accumulation steps = {self.cfg.optimizer.gradient_accumulation_steps}\n'  # 配置中的梯度累积步数。
+            f'    Max training steps = {self.cfg.train.max_steps}\n'  # 训练计划执行的最大优化步数。
+            f'    Training state = {self.train_state}'  # 当前轮数、步数等训练状态。
+        )  # 完成启动日志的写入。
 
-        while True:
-            self.model.train()
-            for i, batch in enumerate(self.dataloader_train):
+        while True:  # 持续进行训练轮次；达到 max_steps 时由下面的 return 退出。
+            self.model.train()  # 将模型切换为训练模式，启用训练时的层行为。
+            print(enumerate(self.dataloader_train))  # 打印数据加载器的枚举对象，用于调试；不会遍历批次。
+            for i, batch in enumerate(self.dataloader_train):  # 依次读取训练批次，i 从 0 开始。
                 # Early stop
-                if (self.cfg.train.limit_train_batches is not None) and (i >= self.cfg.train.limit_train_batches):
-                    break
+                if (self.cfg.train.limit_train_batches is not None) and (i >= self.cfg.train.limit_train_batches):  # 如果设置了每轮训练批次上限，只处理前 limit_train_batches 批。
+                    break  # 本轮训练提前结束，接着进入验证阶段。
 
                 # Process one training step
-                wandb_log = self.train_step(batch)
+                wandb_log = self.train_step(batch)  # 获取这一训练步的损失和梯度等日志数据。
 
                 # Check if loss was None
-                if not math.isfinite(wandb_log["loss/total"]):
-                    logger.error("Loss is {}, stopping training".format(wandb_log["loss/total"]))
-                    sys.exit(1)
+                if not math.isfinite(wandb_log["loss/total"]):  # 检查总损失是否为有限数值。
+                    logger.error("Loss is {}, stopping training".format(wandb_log["loss/total"]))  # 记录异常损失。
+                    sys.exit(1)  # 以错误状态终止程序。
 
                 # Log to wandb
+                # 启用 wandb 且当前步达到日志间隔时，上传训练指标。
                 if self.cfg.logging.wandb and \
-                        self.train_state.step % self.cfg.train.log_step_freq == 0:
-                    wandb_log['lr'] = self.optimizer.param_groups[0]['lr']
-                    wandb_log['step'] = self.train_state.step
-                    wandb_log['relative_step'] = self.train_state.step - self.train_state.initial_step
-                    wandb.log(wandb_log, step=self.train_state.step)
+                        self.train_state.step % self.cfg.train.log_step_freq == 0:  # 检查当前步数是否达到训练日志间隔。
+                    wandb_log['lr'] = self.optimizer.param_groups[0]['lr']  # 记录第一个参数组的当前学习率。
+                    wandb_log['step'] = self.train_state.step  # 记录从训练开始累计的步数。
+                    wandb_log['relative_step'] = self.train_state.step - self.train_state.initial_step  # 记录本次启动后执行的步数。
+                    wandb.log(wandb_log, step=self.train_state.step)  # 按当前训练步上传日志。
 
                 # Save checkpoint
-                if (self.train_state.step % self.cfg.train.checkpoint_freq == 0):
-                    self.save_checkpoint()
+                if (self.train_state.step % self.cfg.train.checkpoint_freq == 0):  # 每经过 checkpoint_freq 个训练步，保存一次模型与训练状态。
+                    self.save_checkpoint()  # 将模型、优化器、调度器等写入检查点文件。
 
                 # Exit training
-                if self.train_state.step >= self.cfg.train.max_steps:
-                    logger.info(f'Ending training at with state: {self.train_state}')
+                if self.train_state.step >= self.cfg.train.max_steps:  # 达到设定的最大训练步数后，结束整个训练函数。
+                    logger.info(f'Ending training at with state: {self.train_state}')  # 记录最终训练状态。
 
-                    wandb.finish()
-                    time.sleep(5)
-                    return
-            print("VAL")
-            self.model.eval()
-            val_log, val_metrics, val_counters = defaultdict(float), defaultdict(float), defaultdict(int)
-            for i, batch in enumerate(self.dataloader_val):
-                val_losses, tmp_metrics, tmp_counters = self.val_step(batch)
+                    wandb.finish()  # 结束 wandb 日志会话。
+                    time.sleep(5)  # 在退出前等待 5 秒。
+                    return  # 退出 train，不再执行本轮后续验证。
+            print("VAL")  # 在终端提示开始验证。
+            self.model.eval()  # 将模型切换为评估模式，关闭训练时的层行为。
+            val_log, val_metrics, val_counters = defaultdict(float), defaultdict(float), defaultdict(int)  # 初始化验证结果的累加容器。
+            for i, batch in enumerate(self.dataloader_val):  # 依次处理验证集的每个批次。
+                val_losses, tmp_metrics, tmp_counters = self.val_step(batch)  # 计算这一批的损失、评估指标及其计数。
 
-                for k, v in val_losses.items():
-                    val_log[k] += v
-                for k in tmp_metrics.keys():
-                    val_metrics[k] += tmp_metrics[k]
-                    val_counters[k] += tmp_counters[k]
+                for k, v in val_losses.items():  # 遍历这一批的各项损失。
+                    val_log[k] += v  # 按指标名累计损失。
+                for k in tmp_metrics.keys():  # 遍历这一批计算出的评估指标。
+                    val_metrics[k] += tmp_metrics[k]  # 累加该指标的数值总和。
+                    val_counters[k] += tmp_counters[k]  # 累加该指标对应的样本计数。
 
-            val_log = {f"VAL_{k}": v / len(self.dataloader_val) for k, v in val_log.items()}
-            val_log["epoch"] = self.train_state.epoch
-            for k in val_metrics.keys():
-                val_log[f"VAL_{k}"] = val_metrics[k] / (val_counters[k] + 1e-4)
+            val_log = {f"VAL_{k}": v / len(self.dataloader_val) for k, v in val_log.items()}  # 按验证批次数求各项平均损失。
+            val_log["epoch"] = self.train_state.epoch  # 给验证日志附上当前轮数。
+            for k in val_metrics.keys():  # 逐项计算验证指标的平均值。
+                val_log[f"VAL_{k}"] = val_metrics[k] / (val_counters[k] + 1e-4)  # 用计数归一化；小常数避免除以零。
 
-            if self.cfg.logging.wandb:
-                wandb.log(val_log, step=self.train_state.step)
+            if self.cfg.logging.wandb:  # 仅在启用 wandb 时上传验证结果。
+                wandb.log(val_log, step=self.train_state.step)  # 将本轮验证结果关联到当前训练步。
 
             # Epoch complete
-            self.train_state.epoch += 1
+            self.train_state.epoch += 1  # 将训练轮数加一。
 
     @torch.no_grad()
     def compute_val_metrics(self, batch, output):

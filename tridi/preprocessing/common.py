@@ -287,7 +287,7 @@ def contacts_worker(obj_mesh, obj_verts, sbj_verts, sbj_faces, contact_threshold
     obj_mesh.vertices = obj_verts
 
     obj_points = obj_mesh.sample(8000)
-    obj2sbj_d, _, _ = igl.signed_distance(obj_points, sbj_verts, sbj_faces, return_normals=False)
+    obj2sbj_d = igl.signed_distance(np.asarray(obj_points, dtype=np.float64), np.asarray(sbj_verts, dtype=np.float64), np.asarray(sbj_faces, dtype=np.int64))[0]
 
     if np.any(obj2sbj_d < contact_threshold):
         return True

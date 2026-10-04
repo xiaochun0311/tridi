@@ -50,10 +50,7 @@ def preprocess(cfg):
     else:
         sequences = _sequences
         hdf5_name = "dataset"
-    if cfg.behave.downsample:
-        hdf5_name += "_10fps"
-    else:
-        hdf5_name += "_30fps"
+    hdf5_name += "_" + (cfg.behave.downsample if cfg.behave.downsample in ("10fps", "1fps") else "30fps")
 
     # init hdf5 file
     subjects = list(set([s.name.split("_")[1] for s in sequences]))
@@ -109,10 +106,10 @@ def preprocess(cfg):
 
         # keep only overlapping t_stamps
         for k, v in smpl_params.items():
-            if k != "save_name":
+            if v.ndim > 0 and v.shape[0] == len(smpl_t_stamps):
                 smpl_params[k] = v[smpl_indices]
         for k, v in obj_params.items():
-            if k != "save_name":
+            if v.ndim > 0 and v.shape[0] == len(obj_t_stamps):
                 obj_params[k] = v[obj_indices]
         # ===========================================
 

@@ -48,8 +48,8 @@ class ContactModel:
             self.decimated_partindex_per_vertex_th = \
                 torch.tensor(decimated_partindex_per_vertex, dtype=torch.long, device=self.device)
 
-        contact_ae = contact_ae.to("cuda")
-        checkpoint = torch.load(weights_path, map_location='cuda', weights_only=False)
+        contact_ae = contact_ae.to(self.device)
+        checkpoint = torch.load(weights_path, map_location=self.device, weights_only=False)
         state_dict = checkpoint[enc_dec_type]
         missing_keys, unexpected_keys = contact_ae.load_state_dict(state_dict, strict=True)
         contact_ae = torch.compile(contact_ae, mode="reduce-overhead")
