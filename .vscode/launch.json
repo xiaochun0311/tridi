@@ -1,0 +1,238 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled"
+      },
+      "name": "[codex/debugger] GRAB 原始数据预处理 (train, 单主体单物体)",
+      "args": [
+        "-c",
+        "config/env.yaml",
+        "--",
+        "grab.split=train",
+        "grab.subjects=['s1']",
+        "grab.objects=['banana']",
+        "grab.downsample=10fps",
+        "grab.generate_obj_keypoints=True",
+        "env.datasets_folder=./data/debug_preprocessed/debugger",
+        "env.raw_datasets_folder=./data/raw"
+      ],
+      "module": "tridi.preprocessing.preprocess_grab"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled"
+      },
+      "name": "[codex/debugger] GRAB 原始数据预处理 (test, 单主体单物体)",
+      "args": [
+        "-c",
+        "config/env.yaml",
+        "--",
+        "grab.split=test",
+        "grab.subjects=['s9']",
+        "grab.objects=['banana']",
+        "grab.downsample=10fps",
+        "grab.generate_obj_keypoints=True",
+        "env.datasets_folder=./data/debug_preprocessed/debugger",
+        "env.raw_datasets_folder=./data/raw"
+      ],
+      "module": "tridi.preprocessing.preprocess_grab"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled"
+      },
+      "name": "[codex/debugger] BEHAVE 原始数据预处理 (train, 单主体单物体)",
+      "args": [
+        "-c",
+        "config/env.yaml",
+        "--",
+        "behave.split=train",
+        "behave.subjects=['Sub01']",
+        "behave.objects=['backpack']",
+        "behave.downsample=10fps",
+        "behave.generate_obj_keypoints=True",
+        "env.datasets_folder=./data/debug_preprocessed/debugger",
+        "env.raw_datasets_folder=./data/raw",
+        "behave.split_file=./data/raw/behave/split.json",
+        "behave.can_objects_path=./data/debug_preprocessed/debugger/canonicalized_objects"
+      ],
+      "module": "tridi.preprocessing.preprocess_behave_30fps"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled"
+      },
+      "name": "[codex/debugger] BEHAVE 原始数据预处理 (test, 单主体单物体)",
+      "args": [
+        "-c",
+        "config/env.yaml",
+        "--",
+        "behave.split=test",
+        "behave.subjects=['Sub03']",
+        "behave.objects=['backpack']",
+        "behave.downsample=10fps",
+        "behave.generate_obj_keypoints=True",
+        "env.datasets_folder=./data/debug_preprocessed/debugger",
+        "env.raw_datasets_folder=./data/raw",
+        "behave.split_file=./data/raw/behave/split.json",
+        "behave.can_objects_path=./data/debug_preprocessed/debugger/canonicalized_objects"
+      ],
+      "module": "tridi.preprocessing.preprocess_behave_30fps"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled"
+      },
+      "name": "[codex/debugger] 训练 (2 steps, GPU0)",
+      "args": [
+        "-c",
+        "config/env.yaml",
+        "scenarios/gb_main.yaml",
+        "--",
+        "dataloader.batch_size=2",
+        "dataloader.workers=0",
+        "logging.wandb=False",
+        "run.job=train",
+        "run.name=debug_debugger_train",
+        "train.max_steps=2",
+        "train.limit_train_batches=1",
+        "train.limit_val_batches=1",
+        "train.print_step_freq=1",
+        "train.log_step_freq=1",
+        "behave.train_split_file=assets/behave_train_available.json",
+        "behave.test_split_file=assets/behave_test_available.json"
+      ],
+      "program": "${workspaceFolder}/main.py"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled"
+      },
+      "name": "[codex/debugger] 生成 (2 samples, 完整1000步)",
+      "args": [
+        "-c",
+        "config/env.yaml",
+        "scenarios/gb_main.yaml",
+        "--",
+        "dataloader.batch_size=2",
+        "dataloader.workers=0",
+        "logging.wandb=False",
+        "run.job=sample",
+        "run.name=debug_debugger_sample",
+        "resume.checkpoint=./assets/gb_main.pth",
+        "run.datasets=[behave]",
+        "sample.dataset=random",
+        "sample.num_samples=2",
+        "sample.class_distribution=uniform",
+        "sample.repetitions=1",
+        "sample.target=meshes",
+        "sample.mode=sample_111",
+        "model.cg_apply=True",
+        "model.cg_scale=2.0"
+      ],
+      "program": "${workspaceFolder}/main.py"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled"
+      },
+      "name": "[codex/debugger] 生成快速检查 (2 samples, 20步)",
+      "args": [
+        "-c",
+        "config/env.yaml",
+        "scenarios/gb_main.yaml",
+        "--",
+        "dataloader.batch_size=2",
+        "dataloader.workers=0",
+        "logging.wandb=False",
+        "run.job=sample",
+        "run.name=debug_debugger_sample",
+        "resume.checkpoint=./assets/gb_main.pth",
+        "run.datasets=[behave]",
+        "sample.dataset=random",
+        "sample.num_samples=2",
+        "sample.class_distribution=uniform",
+        "sample.repetitions=1",
+        "sample.target=meshes",
+        "sample.mode=sample_111",
+        "model.cg_apply=True",
+        "model.cg_scale=2.0",
+        "sample.num_inference_steps=20",
+        "run.name=debug_debugger_sample_fast"
+      ],
+      "program": "${workspaceFolder}/main.py"
+    }
+  ]
+}
