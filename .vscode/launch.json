@@ -232,6 +232,96 @@
         "run.name=debug_trained_123000_fast"
       ],
       "program": "${workspaceFolder}/main.py"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled"
+      },
+      "name": "[codex/debugger] 修复后124000步 生成对照 (seed43, 2 samples)",
+      "args": [
+        "-c",
+        "config/env.yaml",
+        "scenarios/gb_main.yaml",
+        "--",
+        "dataloader.batch_size=2",
+        "dataloader.workers=0",
+        "logging.wandb=False",
+        "run.job=sample",
+        "run.datasets=[behave]",
+        "sample.dataset=random",
+        "sample.num_samples=2",
+        "sample.class_distribution=uniform",
+        "sample.repetitions=1",
+        "sample.target=meshes",
+        "sample.mode=sample_111",
+        "model.cg_apply=True",
+        "model.cg_scale=2.0",
+        "run.seed=43",
+        "run.name=debug_fixed124000_seed43",
+        "resume.checkpoint=./experiments/071_debug_contactloss_fix_124000/checkpoints/checkpoint-step-0124000.pth"
+      ],
+      "program": "${workspaceFolder}/main.py"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled"
+      },
+      "name": "[codex/debugger] 修复后继续训练 (从124000步)",
+      "args": [
+        "-c",
+        "experiments/071_debug_contactloss_fix_124000/config.yaml",
+        "--",
+        "run.job=train",
+        "resume.checkpoint=./experiments/071_debug_contactloss_fix_124000/checkpoints/checkpoint-step-0124000.pth",
+        "train.max_steps=300000",
+        "train.checkpoint_freq=1000",
+        "logging.wandb=False"
+      ],
+      "program": "${workspaceFolder}/main.py"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "python": "/home/yanghc/miniconda3/envs/tridi-offline/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "stopOnEntry": true,
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "WANDB_MODE": "disabled",
+        "PYTHONPATH": "${workspaceFolder}"
+      },
+      "name": "[codex/debugger] 真实凳子还原与去噪检查 (修复后124000步)",
+      "args": [
+        "--checkpoint",
+        "./experiments/071_debug_contactloss_fix_124000/checkpoints/checkpoint-step-0124000.pth",
+        "--output",
+        "./experiments/debug_stool_reconstruction/fixed124000"
+      ],
+      "program": "${workspaceFolder}/scripts/check_stool_reconstruction.py"
     }
   ]
 }

@@ -128,7 +128,7 @@ class Trainer:
 
                 loss_i = F.mse_loss(pred_obj_keypoints, gt_obj_keypoints, reduction='none')
             elif key == "sbj_contacts":
-                mask = torch.logical_and(output.timesteps_sbj <= THR, output.timesteps_sbj <= THR)
+                mask = torch.logical_and(output.timesteps_sbj <= THR, output.timesteps_obj <= THR)
 
                 pred_contact_vertices = output.sbj_vertices
                 pred_obj_keypoints = output.obj_keypoints
@@ -152,7 +152,7 @@ class Trainer:
             else:
                 raise NotImplementedError(f"No implementation for {key} loss.")
 
-            loss_i = loss_i.mean()
+            loss_i = loss_i.mean() if loss_i.numel() else loss_i.sum()
             loss += weight * loss_i
             wandb_log[f'loss/{key}'] = loss_i.detach().cpu().item()
 
@@ -229,6 +229,9 @@ class Trainer:
                     logger.error("Loss is {}, stopping training".format(wandb_log["loss/total"]))
                     sys.exit(1)
 
+                if self.train_state.step % self.cfg.train.print_step_freq == 0:
+                    logger.info(f"Step {self.train_state.step}: {wandb_log}")
+
                 # Log to wandb
                 if self.cfg.logging.wandb and \
                         self.train_state.step % self.cfg.train.log_step_freq == 0:
@@ -265,6 +268,7 @@ class Trainer:
             for k in val_metrics.keys():
                 val_log[f"VAL_{k}"] = val_metrics[k] / (val_counters[k] + 1e-4)
 
+            logger.info(f"Validation step {self.train_state.step}: {val_log}")
             if self.cfg.logging.wandb:
                 wandb.log(val_log, step=self.train_state.step)
 
