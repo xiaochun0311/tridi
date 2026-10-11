@@ -170,7 +170,7 @@
         "OPENBLAS_NUM_THREADS": "1",
         "WANDB_MODE": "disabled"
       },
-      "name": "[codex/debugger] 生成 (2 samples, 完整1000步)",
+      "name": "[codex/debugger] 自训练123000步 生成 (2 samples, 完整1000步)",
       "args": [
         "-c",
         "config/env.yaml",
@@ -180,8 +180,6 @@
         "dataloader.workers=0",
         "logging.wandb=False",
         "run.job=sample",
-        "run.name=debug_debugger_sample",
-        "resume.checkpoint=./assets/gb_main.pth",
         "run.datasets=[behave]",
         "sample.dataset=random",
         "sample.num_samples=2",
@@ -190,7 +188,9 @@
         "sample.target=meshes",
         "sample.mode=sample_111",
         "model.cg_apply=True",
-        "model.cg_scale=2.0"
+        "model.cg_scale=2.0",
+        "resume.checkpoint=./experiments/018_gb_train_20260926_183823/checkpoints/checkpoint-step-0123000.pth",
+        "run.name=debug_trained_123000_full"
       ],
       "program": "${workspaceFolder}/main.py"
     },
@@ -208,7 +208,7 @@
         "OPENBLAS_NUM_THREADS": "1",
         "WANDB_MODE": "disabled"
       },
-      "name": "[codex/debugger] 生成快速检查 (2 samples, 20步)",
+      "name": "[codex/debugger] 自训练123000步 生成快速检查 (2 samples, 20步)",
       "args": [
         "-c",
         "config/env.yaml",
@@ -218,8 +218,6 @@
         "dataloader.workers=0",
         "logging.wandb=False",
         "run.job=sample",
-        "run.name=debug_debugger_sample",
-        "resume.checkpoint=./assets/gb_main.pth",
         "run.datasets=[behave]",
         "sample.dataset=random",
         "sample.num_samples=2",
@@ -230,7 +228,8 @@
         "model.cg_apply=True",
         "model.cg_scale=2.0",
         "sample.num_inference_steps=20",
-        "run.name=debug_debugger_sample_fast"
+        "resume.checkpoint=./experiments/018_gb_train_20260926_183823/checkpoints/checkpoint-step-0123000.pth",
+        "run.name=debug_trained_123000_fast"
       ],
       "program": "${workspaceFolder}/main.py"
     }
