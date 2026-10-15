@@ -1,0 +1,2 @@
+SERVER=bjutcg
+18 saved embeddings: test scores independently recomputed and matched.
