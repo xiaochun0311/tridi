@@ -1,0 +1,15 @@
+# Overlay after scenarios/gb_main.yaml; loss/guidance weights are starting values.
+model:
+  object_sdf_resolution: 64
+  object_sdf_padding: 0.1
+  # Legacy data includes open scans; signs near holes remain approximate.
+  object_sdf_allow_open: true
+  sdf_penetration_weight: 1.0
+  sdf_contact_weight: 1.0
+  cg_apply: true
+  cg_scale: 0.01
+  cg_t_stamp: 200
+train:
+  losses:
+    obj_sdf_penetration: 20.0
+    obj_sdf_contact: 20.0

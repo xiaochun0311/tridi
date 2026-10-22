@@ -140,13 +140,22 @@ class TriDiModel(BaseTriDiModel):
             # output.retain_grad()
             split_output = self.split_output(output)
 
-            sbj_vertices, obj_keypoints = self.mesh_model.get_meshes_wkpts_th(split_output, batch.obj_class.to(device))
+            mesh_kwargs = {'sbj_gender': getattr(batch, 'sbj_gender', None)} if self.object_sdf_resolution else {}
+            sbj_vertices, obj_keypoints = self.mesh_model.get_meshes_wkpts_th(
+                split_output, batch.obj_class.to(device), **mesh_kwargs
+            )
 
             # estimated contacts from smpl and obj
             contact_indexes = batch.sbj_contact_indexes.to(device)
             pred_contact_vertices = sbj_vertices[:, contact_indexes[0]]
-            pred_contacts = torch.cdist(pred_contact_vertices, obj_keypoints, p=2)  # B x Cont X N_obj
-            pred_contacts = torch.min(pred_contacts, dim=-1).values
+            if self.object_sdf_resolution:
+                signed_distances = self.mesh_model.query_object_sdf(
+                    sbj_vertices, batch.obj_class, split_output.obj_R, split_output.obj_c
+                )
+                pred_contacts = signed_distances[:, contact_indexes[0]].abs()
+            else:
+                pred_contacts = torch.cdist(pred_contact_vertices, obj_keypoints, p=2)  # B x Cont X N_obj
+                pred_contacts = torch.min(pred_contacts, dim=-1).values
 
             # decode them to a contact map
             if mode[2] == "1":
@@ -166,9 +175,17 @@ class TriDiModel(BaseTriDiModel):
                 reduction="none"
             )
             guidance_loss = guidance_loss.mean(-1).sum()
-            guidance_loss.backward()
-            torch.nn.utils.clip_grad_norm_(output, 50)
-            _grad = -output.grad
+            if self.object_sdf_resolution:
+                guidance_loss = self.sdf_contact_weight * guidance_loss + self.sdf_penetration_weight * (
+                    F.relu(-signed_distances).mean(-1).sum()
+                )
+                _grad = -torch.autograd.grad(guidance_loss, output)[0]
+                # Geometry correction must not change identity to escape a collision.
+                _grad[:, :10] = 0
+            else:
+                guidance_loss.backward()
+                torch.nn.utils.clip_grad_norm_(output, 50)
+                _grad = -output.grad
 
         grad = []
         if mode[0] == "1":
@@ -178,6 +195,9 @@ class TriDiModel(BaseTriDiModel):
         if mode[2] == "1":
             grad.append(_grad[:, D_sbj + D_obj:])
         grad = torch.cat(grad, dim=1)
+        if self.object_sdf_resolution:
+            norm = grad.norm(dim=1, keepdim=True).clamp_min(1e-12)
+            grad = grad * (50.0 / norm).clamp(max=1.0)
 
         return grad
 
@@ -234,6 +254,9 @@ class TriDiModel(BaseTriDiModel):
         # Setup scheduler
         # Get scheduler from mapping, or use self.scheduler if None
         scheduler = self.scheduler if scheduler is None else self.schedulers_map[scheduler]
+        accepts_guidance = 'guidance' in inspect.signature(scheduler.step).parameters
+        if self.cg_apply and not accepts_guidance and not self.object_sdf_resolution:
+            raise ValueError('Legacy contact guidance requires the ddpm_guided scheduler.')
         # Set timesteps
         accepts_offset = "offset" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
         extra_set_kwargs = {"offset": 1} if accepts_offset else {}
@@ -281,11 +304,13 @@ class TriDiModel(BaseTriDiModel):
 
             # Step
             t = t.item()
+            guidance = None
             if self.cg_apply and t < self.cg_t_stamp:
                 guidance = self.get_prediction_from_cg(
                     mode, _pred, x_sbj_cond, x_obj_cond, x_contact_cond, batch, t
                 )
-                extra_step_kwargs["guidance"] = guidance
+                if accepts_guidance:
+                    extra_step_kwargs["guidance"] = guidance
 
             # Select part of the output based on the sampling mode
             pred = []
@@ -296,6 +321,9 @@ class TriDiModel(BaseTriDiModel):
             if mode[2] == "1":
                 pred.append(_pred[:, D_sbj + D_obj:])
             pred = torch.cat(pred, dim=1)
+            if guidance is not None and not accepts_guidance:
+                # Apply the same x0 correction for DDIM/DDPM without a custom scheduler.
+                pred = pred + self.cg_scale * guidance
 
             x_t = []
             if mode[0] == "1":

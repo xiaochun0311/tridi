@@ -99,6 +99,11 @@ class BaseTriDiModel(ModelMixin):
         cg_apply: bool = False,
         cg_scale: float = 0.0,
         cg_t_stamp: int = 200,
+        object_sdf_resolution: int = 0,
+        object_sdf_padding: float = 0.1,
+        object_sdf_allow_open: bool = False,
+        sdf_penetration_weight: float = 1.0,
+        sdf_contact_weight: float = 1.0,
     ):
         super().__init__()
 
@@ -106,6 +111,15 @@ class BaseTriDiModel(ModelMixin):
         self.cg_apply = cg_apply
         self.cg_scale = cg_scale
         self.cg_t_stamp = cg_t_stamp
+        if object_sdf_resolution and object_sdf_resolution < 8:
+            raise ValueError('object_sdf_resolution must be zero or at least 8.')
+        if object_sdf_padding <= 0 or min(sdf_penetration_weight, sdf_contact_weight) < 0:
+            raise ValueError('SDF padding must be positive and loss weights nonnegative.')
+        self.object_sdf_resolution = object_sdf_resolution
+        self.object_sdf_padding = object_sdf_padding
+        self.object_sdf_allow_open = object_sdf_allow_open
+        self.sdf_penetration_weight = sdf_penetration_weight
+        self.sdf_contact_weight = sdf_contact_weight
 
         # Input size
         # sbj_shape, sbj_global_pose, sbj_pose, sbj_c, obj_pose

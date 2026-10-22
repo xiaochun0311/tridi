@@ -8,6 +8,7 @@ import trimesh
 from tridi.data.batch_data import BatchData
 from tridi.model.base import TriDiModelOutput
 from tridi.utils.geometry import rotation_6d_to_matrix
+from .object_sdf import ObjectSDF
 
 
 class MeshModel:
@@ -19,7 +20,8 @@ class MeshModel:
         self, model_path: str, batch_size: int,
         canonical_obj_meshes: Dict[int, trimesh.Trimesh],
         canonical_obj_keypoints: Dict[int, Dict[str, np.ndarray]],
-        device='cpu'
+        device='cpu', object_sdf_resolution=0, object_sdf_padding=0.1,
+        object_sdf_cache_dir=None, object_sdf_allow_open=False
     ) -> None:
         self.smpl_f = smplx.build_layer(
             model_path=model_path, model_type="smplh", gender="female",
@@ -33,6 +35,10 @@ class MeshModel:
 
         # object meshes and keypoints
         self.canonical_obj_meshes = canonical_obj_meshes
+        self.object_sdf = ObjectSDF(
+            canonical_obj_meshes, object_sdf_resolution, object_sdf_padding,
+            object_sdf_cache_dir, device, allow_open=object_sdf_allow_open
+        ) if object_sdf_resolution else None
         self.canonical_obj_keypoints = canonical_obj_keypoints
         class_ids = sorted(self.canonical_obj_keypoints.keys())
         self.canonical_obj_keypoints_th = []
@@ -57,6 +63,11 @@ class MeshModel:
         # batch size
         self.batch_size = batch_size
         self.device = device
+
+    def query_object_sdf(self, points, obj_class, obj_R, obj_c, scale=1.0):
+        if self.object_sdf is None:
+            raise ValueError('Enable model.object_sdf_resolution to query object SDFs.')
+        return self.object_sdf.query(points, obj_class, obj_R, obj_c, scale)
 
     @staticmethod
     def _apply_scale(
@@ -177,6 +188,8 @@ class MeshModel:
         self.smpl_f = self.smpl_f.to(device)
         self.smpl_m = self.smpl_m.to(device)
         self.canonical_obj_keypoints_th = self.canonical_obj_keypoints_th.to(device)
+        if self.object_sdf is not None:
+            self.object_sdf.to(device)
 
         self.device = device
 

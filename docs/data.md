@@ -1,3 +1,8 @@
+## Mesh + SDF object geometry
+
+Optional mesh-backed object SDFs are available for training losses and sampling
+guidance. See [configuration, mesh requirements and checks](object_mesh_sdf.md).
+
 ## SMPL, SMPL+H and MANO model
 The project uses [smplx](https://github.com/vchoutas/smplx) package to work with SMPL body model.
 Follow [this](https://github.com/vchoutas/smplx#downloading-the-model) link for the instruction on setting it up.

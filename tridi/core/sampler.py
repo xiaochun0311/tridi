@@ -47,7 +47,11 @@ class Sampler:
             batch_size=2 * cfg.dataloader.batch_size,
             canonical_obj_meshes=self.canonical_obj_meshes,
             canonical_obj_keypoints=canonical_obj_keypoints,
-            device=self.device
+            device=self.device,
+            object_sdf_resolution=cfg.model.object_sdf_resolution,
+            object_sdf_padding=cfg.model.object_sdf_padding,
+            object_sdf_allow_open=cfg.model.object_sdf_allow_open,
+            object_sdf_cache_dir=Path(cfg.env.datasets_folder) / 'object_sdf',
         )
         self.model.set_mesh_model(self.mesh_model)
 

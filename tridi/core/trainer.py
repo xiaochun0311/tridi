@@ -27,6 +27,10 @@ class Trainer:
     def __init__(self, cfg: ProjectConfig, model):
         self.cfg = cfg
 
+        sdf_losses = {"obj_sdf_penetration", "obj_sdf_contact"}
+        if sdf_losses.intersection(cfg.train.losses) and cfg.model.object_sdf_resolution <= 0:
+            raise ValueError("Object SDF losses require model.object_sdf_resolution > 0.")
+
         model = model.to("cuda")
 
         optimizer = get_optimizer(cfg, model)
@@ -45,7 +49,11 @@ class Trainer:
             batch_size=cfg.dataloader.batch_size,
             canonical_obj_meshes=canonical_obj_meshes,
             canonical_obj_keypoints=canonical_obj_keypoints,
-            device=self.model.device
+            device=self.model.device,
+            object_sdf_resolution=cfg.model.object_sdf_resolution,
+            object_sdf_padding=cfg.model.object_sdf_padding,
+            object_sdf_allow_open=cfg.model.object_sdf_allow_open,
+            object_sdf_cache_dir=Path(cfg.env.datasets_folder) / "object_sdf"
         )
         self.model.set_mesh_model(self.mesh_model)
         self.optimizer = optimizer
@@ -90,8 +98,9 @@ class Trainer:
 
         # aux output is (x_0, x_t, noise, x_0_pred)
         output = self.model.split_output(aux_output[3], aux_output)
+        mesh_kwargs = {'sbj_gender': batch.sbj_gender} if self.cfg.model.object_sdf_resolution else {}
         sbj_vertices, obj_keypoints, sbj_joints = self.mesh_model.get_meshes_wkpts_th(
-            output, batch.obj_class, batch.scale, return_joints=True
+            output, batch.obj_class, batch.scale, return_joints=True, **mesh_kwargs
         )
         output.sbj_vertices = sbj_vertices
         output.obj_keypoints = obj_keypoints
@@ -147,6 +156,32 @@ class Trainer:
                 pred_contacts = pred_contacts.min(dim=-1).values
                 gt_contacts = batch.sbj_contacts_full[mask.cpu()].to(output.sbj_vertices.device)
                 loss_i = F.mse_loss(pred_contacts, gt_contacts, reduction='none')
+            elif key in ("obj_sdf_penetration", "obj_sdf_contact"):
+                mask = (output.timesteps_sbj <= THR) & (output.timesteps_obj <= THR)
+                if not mask.any():
+                    loss_i = output.sbj_vertices.sum() * 0.0
+                else:
+                    device = output.sbj_vertices.device
+                    obj_class = batch.obj_class.to(device)[mask]
+                    scale = batch.scale.to(device)[mask] if batch.scale is not None else 1.0
+                    pred_vertices = output.sbj_vertices[mask]
+                    if key == "obj_sdf_contact":
+                        indexes = batch.sbj_contact_indexes[0].to(device)
+                        pred_vertices = pred_vertices[:, indexes]
+                        with torch.no_grad():
+                            # Ground-truth SMPL vertices and poses are unscaled, in metres.
+                            gt_sdf = self.mesh_model.query_object_sdf(
+                                batch.sbj_vertices.to(device)[mask][:, indexes], obj_class,
+                                batch.obj_R.to(device)[mask], batch.obj_c.to(device)[mask]
+                            )
+                            contact_mask = gt_sdf.abs() <= 0.005
+                    pred_sdf = self.mesh_model.query_object_sdf(
+                        pred_vertices, obj_class, output.obj_R[mask], output.obj_c[mask], scale=scale
+                    )
+                    if key == "obj_sdf_penetration":
+                        loss_i = F.relu(-pred_sdf).square()
+                    else:
+                        loss_i = (pred_sdf.square() * contact_mask).sum() / contact_mask.sum().clamp(min=1)
             elif key.startswith("denoise"):
                 loss_i = denoise_loss[key]
             else:
