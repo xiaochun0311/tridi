@@ -25,6 +25,7 @@ class BatchData:
     sbj_contact_indexes: Optional[Tensor] = None  # dim is 256
     sbj_contacts: Optional[Tensor] = None  # dim is 256
     sbj_contacts_full: Optional[Tensor] = None  # dim is 256
+    sbj_contact_target: Optional[Tensor] = None  # explicit sampled-vertex heatmap, never inferred from GT poses here
     # obj
     obj_R: Optional[Tensor] = None  # R is 6d
     obj_c: Optional[Tensor] = None  # dim is 3d

@@ -1,0 +1,11 @@
+# Overlay after gb_main.yaml and object_mesh_sdf.yaml; heatmap targets stay explicit.
+model:
+  sdf_hand_refinement: true
+  sdf_refine_steps: 5
+  sdf_refine_max_delta: 0.1
+  sdf_penetration_weight: 10.0
+  sdf_contact_weight: 1.0
+  cg_scale: 2.0
+sample:
+  c: ddpm_guided
+  num_inference_steps: 100

@@ -104,6 +104,9 @@ class BaseTriDiModel(ModelMixin):
         object_sdf_allow_open: bool = False,
         sdf_penetration_weight: float = 1.0,
         sdf_contact_weight: float = 1.0,
+        sdf_hand_refinement: bool = False,
+        sdf_refine_steps: int = 5,
+        sdf_refine_max_delta: float = 0.1,
     ):
         super().__init__()
 
@@ -120,6 +123,11 @@ class BaseTriDiModel(ModelMixin):
         self.object_sdf_allow_open = object_sdf_allow_open
         self.sdf_penetration_weight = sdf_penetration_weight
         self.sdf_contact_weight = sdf_contact_weight
+        if sdf_refine_steps < 1 or sdf_refine_max_delta <= 0:
+            raise ValueError('SDF refinement requires positive steps and max delta.')
+        self.sdf_hand_refinement = sdf_hand_refinement
+        self.sdf_refine_steps = sdf_refine_steps
+        self.sdf_refine_max_delta = sdf_refine_max_delta
 
         # Input size
         # sbj_shape, sbj_global_pose, sbj_pose, sbj_c, obj_pose

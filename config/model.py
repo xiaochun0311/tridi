@@ -48,4 +48,7 @@ class TriDiModelConfig:
     object_sdf_allow_open: bool = False
     sdf_penetration_weight: float = 1.0
     sdf_contact_weight: float = 1.0
+    sdf_hand_refinement: bool = False
+    sdf_refine_steps: int = 5
+    sdf_refine_max_delta: float = 0.1
 # ============================================================

@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from tridi.data.batch_data import BatchData
 from .base import BaseTriDiModel, TriDiModelOutput
+from .sdf_refinement import refine_sdf_prediction
 
 logger = getLogger(__name__)
 
@@ -134,6 +135,8 @@ class TriDiModel(BaseTriDiModel):
         else:
             _contact = x_contact_cond
         _output = torch.cat([_sbj, _obj, _contact], dim=1)
+        if self.object_sdf_resolution and getattr(self, 'sdf_hand_refinement', False) and mode[0] == '1':
+            return refine_sdf_prediction(self, mode, _output, batch)
 
         with torch.enable_grad():
             output = _output.clone().detach().requires_grad_(True)

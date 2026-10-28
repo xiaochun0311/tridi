@@ -69,6 +69,13 @@ class MeshModel:
             raise ValueError('Enable model.object_sdf_resolution to query object SDFs.')
         return self.object_sdf.query(points, obj_class, obj_R, obj_c, scale)
 
+    def get_hand_mask(self, gender, batch_size):
+        male = self.smpl_m.lbs_weights.argmax(1) >= 20
+        female = self.smpl_f.lbs_weights.argmax(1) >= 20
+        if gender is None:
+            return male.unsqueeze(0).expand(batch_size, -1)
+        return torch.where(gender.to(male.device).bool().reshape(-1, 1), male, female)
+
     @staticmethod
     def _apply_scale(
             sbj_vertices: torch.Tensor, obj_vertices: torch.Tensor,

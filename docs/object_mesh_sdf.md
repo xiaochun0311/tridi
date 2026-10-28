@@ -106,3 +106,93 @@ exercise nonzero contact gradients. An open GRAB camera mesh was also queried
 successfully with the explicit approximate-sign mode and finite gradients.
 These checks establish implementation behavior, not a benchmark improvement;
 full training and hand-contact quality evaluation remain to be done.
+
+## Bounded arm/hand refinement
+
+`scenarios/object_mesh_sdf_hand.yaml` enables the optional second version. Load
+it after `scenarios/gb_main.yaml` and `scenarios/object_mesh_sdf.yaml`:
+
+```bash
+cd /home/yanghc/tridi-object-mesh-sdf
+/home/yanghc/miniconda3/envs/tridi-offline/bin/python main.py \
+  -c config/env.yaml scenarios/gb_main.yaml scenarios/object_mesh_sdf.yaml scenarios/object_mesh_sdf_hand.yaml -- \
+  run.name=mesh_sdf_hand_sample run.job=sample \
+  resume.checkpoint=/home/yanghc/tridi/assets/gb_main.pth \
+  env.datasets_folder=/home/yanghc/tridi/data/preprocessed \
+  env.smpl_folder=/home/yanghc/tridi/data/smplx_models \
+  env.assets_folder=/home/yanghc/tridi/assets \
+  dataloader.batch_size=8 sample.dataset=normal sample.mode=100 sample.contacts_mode=heatmap
+```
+
+No retraining or new weights are needed. The sampler now forwards the configured
+scheduler and inference-step count; the example uses 100 guided-DDPM steps.
+
+- In **heatmap-conditioned** sampling, the sampler explicitly stores the input
+  binary 5 cm heatmap in `batch.sbj_contact_target`. Geometry refinement can use
+  these original target bits instead of recovering them from a lossy latent.
+  This is additional retained input information compared with the first version;
+  its benefit must not be attributed to SDF alone. No ground-truth pose is read
+  by the refiner. A custom caller must provide this field only for a declared
+  input heatmap, not derive it from withheld evaluation annotations.
+- CLIP-conditioned sampling leaves that field unset. Generated-contact modes
+  ignore it. Both use the existing decoder, so missing decoded hand contacts
+  remain a limitation for those modes.
+- Contact loss is normalized by active hand targets. Hand and non-hand collision
+  losses are separately normalized by active penetrating points, avoiding dilution
+  of a few finger collisions by all 6890 body vertices. Surface tolerance is 2 mm;
+  collision tolerance is 1 mm. These tolerances are in the canonical metre units
+  used by the existing sampling path.
+- Each guided clean prediction takes five gradient steps, with per-coordinate
+  changes bounded by `sdf_refine_max_delta=0.1`. Only parameters `106:322`
+  (shoulders through fingers) are directly changed. Shape, root orientation,
+  torso/legs, root translation, object pose and contacts are directly frozen.
+  Diffusion coupling can still change their final generated values indirectly;
+  evaluate final drift rather than claiming exact equality to unguided output.
+- Per sample, only an improved candidate whose contact loss, hand/non-hand
+  collision loss, fixed-denominator total collision loss and maximum depth do
+  not worsen is returned. The unchanged clean prediction is the fallback. These
+  checks use interpolated SDF values, not exact physical guarantees: open meshes,
+  sub-voxel details, self-intersection and grasp stability still require separate
+  evaluation. In object-only generation the original SDF guidance remains active.
+
+The original path remains available with `model.sdf_hand_refinement=false`.
+This option changes sampling only; existing SDF training losses are unchanged.
+Tests are in `tests/test_sdf_refinement.py`, including empty targets, source
+isolation, bounded updates, collision regression and sampler settings.
+
+### Second-version validation (2026-10-28)
+
+Fresh sequence pairs excluded all sequences used in the first evaluation.
+Calibration used 12 conditions and selected step scale 2 with penetration weight
+10. Test used 33 conditions, 19 object types and two new noise seeds (6792/6793),
+100 guided-DDPM steps, the same frozen official weights, and four variants.
+There were 264 generated samples; no finetuning was performed.
+
+Closed-volume analysis covers 29 conditions / 16 object types. Exact original
+triangle queries, independent of the SDF interpolation grid, gave these means:
+
+| Variant | Hand penetration mm | Full-body penetration mm | GT20mm target gap mm |
+| --- | ---: | ---: | ---: |
+| Old SDF, scale 2 | 0.1141 | 0.1878 | 53.6344 |
+| Bounded refinement, decoded targets | 0.0328 | 0.1685 | 49.8110 |
+| Bounded refinement, original binary heatmap | 0.0575 | 0.1726 | 40.1132 |
+
+Decoded-target refinement reduced hand penetration relative to old SDF in 18/29
+conditions, worsened 6 and tied 5; the object-cluster bootstrap interval for mean
+change was [-0.1574, -0.0199] mm. Its gap change interval crossed zero. Retaining
+the original heatmap reduced gap in 19/29 conditions and worsened 10, with mean
+change interval [-24.8325, -3.1681] mm; its hand-penetration change interval crossed
+zero. Input-heatmap 5 mm touch rate did not improve over old SDF (8.05% vs 8.57%).
+These are partial aggregate improvements, not guarantees for each grasp.
+
+Per-step local updates produced final root drift of 0.18/0.23 mm relative to
+unguided generation, versus 26.51 mm for old SDF. The same previously explored
+test subjects s9/s10 were used, so these are fresh sequences, not blind subject
+generalization. Open meshes, self-collision, force/friction and temporal stability
+remain unverified limitations. Thirty-two tests and independent recomputation of
+12 stored metric rows passed; all outputs and fixed conditions were verified.
+
+Server artifacts and reproducible scripts:
+`outputs/sdf-hand-20261028-r2/`, especially `report_v2.md`, `summary_v2.json`,
+`verification.json` and `scripts/`. Earlier pilot validation is preserved in
+`outputs/sdf-hand-20261028/`; it predates the added total-penetration safeguard.
