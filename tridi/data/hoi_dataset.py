@@ -12,6 +12,7 @@ import torch
 import trimesh
 
 from .batch_data import BatchData
+from .object_keypoints import load_object_keypoints
 from ..utils.geometry import matrix_to_rotation_6d
 
 logger = getLogger(__name__)
@@ -389,9 +390,4 @@ class HOIDataset:
         return canonical_obj_meshes
 
     def _load_canonical_keypoints(self) -> Dict[int, Dict[str, np.ndarray]]:
-        canonical_obj_keypoints = dict()
-        for class_id, object_name in self.classid2obj.items():
-            canonical_obj_keypoints[class_id] = dict(np.load(
-                str(self.root / "object_keypoints" / f"{object_name}.npz")
-            ))
-        return canonical_obj_keypoints
+        return load_object_keypoints(self.name, self.root, self.classid2obj, self.assets_folder)

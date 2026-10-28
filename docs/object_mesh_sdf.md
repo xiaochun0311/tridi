@@ -162,6 +162,11 @@ isolation, bounded updates, collision regression and sampler settings.
 
 ### Second-version validation (2026-10-28)
 
+**Historical results with inconsistent point inputs:** the later audit below
+found that server-generated NPZ keypoints covered only small surface patches.
+These numbers preserve that experiment; they do not establish performance with
+the bundled canonical inputs or successful grasps.
+
 Fresh sequence pairs excluded all sequences used in the first evaluation.
 Calibration used 12 conditions and selected step scale 2 with penetration weight
 10. Test used 33 conditions, 19 object types and two new noise seeds (6792/6793),
@@ -196,3 +201,38 @@ Server artifacts and reproducible scripts:
 `outputs/sdf-hand-20261028-r2/`, especially `report_v2.md`, `summary_v2.json`,
 `verification.json` and `scripts/`. Earlier pilot validation is preserved in
 `outputs/sdf-hand-20261028/`; it predates the added total-penetration safeguard.
+
+### Canonical point input repair and failure audit (2026-10-28)
+
+The user-reported flute, mug and doorknob examples were contact failures: their
+right hands had no vertices within 5 mm of the exact object surface. The server's
+preprocessed flute points covered only 13 mm of its 210 mm length; mug points
+covered only its bottom face, and doorknob points only a base corner. Bundled
+`assets/object_keypoints/{grab,behave}.pkl` references cover the complete shapes.
+For these three objects, reference point-to-mesh median errors were at most
+0.038 mm and maximum errors at most 0.425 mm, consistent with their mesh frames.
+
+Both normal and random dataset loaders now prefer these bundled references and
+warn if regenerated NPZ points differ. Shared preprocessed data are never
+overwritten. A custom dataset without a bundled reference still loads its NPZ
+files; an incomplete or malformed present reference fails clearly. PointNeXt
+features and learned weights are unchanged.
+
+The regression reran all 33 previous conditions, seeds 6792/6793, batch size 8,
+100 steps and all four variants, without retuning (264 generations). These are
+reused diagnostic cases, not a new held-out evaluation. Physical input parameters
+and GT geometry remained identical; only canonical point inputs and their supplied
+5 cm contact heatmaps/latents changed. Input repair must be assessed separately
+from SDF guidance. Original assets, NPZ files, source and checkpoint hashes were
+verified unchanged during the run. All 42 unit tests passed.
+
+For the displayed first-seed right hands, nearest exact surface gaps changed:
+flute 22.18 -> 0.04 mm, mug 28.44 -> 9.30 mm, doorknob 23.83 -> 102.03 mm.
+Flute now has contact but differs strongly in hand orientation from the reference;
+this alone does not establish a correct playing grasp. Mug and doorknob still
+have zero near-surface hand vertices. SDF distance/collision objectives do not
+encode anatomical palm contact, task-appropriate wrist orientation or a grasp
+prior. This repair does not solve those grasp failures.
+
+Artifacts: `outputs/sdf-correct-points-20261028/`, including
+`report_input_repair.md`, `input_repair_verification.json`, `test/` and `visual/`.

@@ -11,6 +11,7 @@ import trimesh
 from omegaconf import OmegaConf
 
 from .batch_data import BatchData
+from .object_keypoints import load_object_keypoints
 
 logger = getLogger(__name__)
 
@@ -143,12 +144,7 @@ class RandomDataset:
         return canonical_obj_meshes
 
     def _load_canonical_keypoints(self) -> Dict[int, Dict[str, np.ndarray]]:
-        canonical_obj_keypoints = dict()
-        for class_id, object_name in self.classid2obj.items():
-            canonical_obj_keypoints[class_id] = dict(np.load(
-                str(self.root / "object_keypoints" / f"{object_name}.npz")
-            ))
-        return canonical_obj_keypoints
+        return load_object_keypoints(self.name, self.root, self.classid2obj, self.assets_folder)
 
     def _load_obj_pointnext(self) -> Dict[int, np.ndarray]:
         with (self.root / "object_pointnext.pkl").open("rb") as fp:
