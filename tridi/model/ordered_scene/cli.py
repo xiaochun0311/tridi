@@ -330,7 +330,7 @@ def main():
     fit.add_argument("--log-every", default=50, type=int)
     fit.add_argument("--weight-decay", default=1e-6, type=float)
     fit.add_argument("--betas", default=(.95, .999), nargs=2, type=float)
-    fit.add_argument("--model-profile", choices=MODEL_PROFILES, default="legacy")
+    fit.add_argument("--model-profile", choices=MODEL_PROFILES, default="root_affine_v1")
     fit.add_argument("--contact-weight", default=0., type=float)
     fit.add_argument("--contact-max-timestep", default=250, type=int)
     fit.add_argument("--models-root", type=Path)

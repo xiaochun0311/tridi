@@ -19,7 +19,7 @@ def _annotations(value):
     return rows
 
 
-def inspect(root, annotations=None):
+def inspect(root, annotations=None, allow_weak=False):
     """Inventory records, not inferred action boundaries or source-sequence IDs."""
     import h5py
 
@@ -41,9 +41,14 @@ def inspect(root, annotations=None):
     if annotations is not None:
         rows = _annotations(annotations)
         accepted = sum(row.get("status") == "verified" and row.get("review_status") == "accepted_by_human" for row in rows)
+        machine_checked = sum(row.get("status") in {"weak_temporal_v1", "weak_temporal_v2"}
+            and row.get("review_status") == "machine_checked"
+            and row.get("weak_labeling", {}).get("algorithm") == row.get("status") for row in rows)
         valid_splits = sum(row.get("split") in {"train", "val", "test"} for row in rows)
-        report["annotations"] = dict(records=len(rows), accepted=accepted, valid_splits=valid_splits,
-            labels_ready_for_prepare=(accepted == valid_splits == len(rows)),
+        eligible = accepted + (machine_checked if allow_weak else 0)
+        report["annotations"] = dict(records=len(rows), accepted=accepted, machine_checked=machine_checked,
+            weak_supervision_enabled=allow_weak, valid_splits=valid_splits,
+            labels_ready_for_prepare=(eligible == valid_splits == len(rows)),
             statuses=dict(Counter(str(row.get("status")) for row in rows)))
     return report
 

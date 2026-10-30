@@ -1,0 +1,9 @@
+run:
+  name: himo_relations_v2
+
+himo:
+  model_profile: root_affine_v1
+  supervision: weak_temporal_v2
+  annotations: ./outputs/himo-repair-20261030/stage_weak_relations.json
+  prepared_data: ${env.datasets_folder}/himo_weak_relations_v2_20261030.pth
+  contact_weight: 0.0

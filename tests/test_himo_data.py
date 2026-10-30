@@ -26,6 +26,16 @@ class GeometryFixture:
 
 
 class HIMODataTest(unittest.TestCase):
+    def test_inventory_weak_opt_in_does_not_claim_human_acceptance(self):
+        row = dict(self.row, split="train", status="weak_temporal_v2", review_status="machine_checked",
+            weak_labeling=dict(algorithm="weak_temporal_v2"))
+        labels = {"candidates": [row]}
+        self.assertFalse(inspect(self.root, labels)["annotations"]["labels_ready_for_prepare"])
+        report = inspect(self.root, labels, allow_weak=True)["annotations"]
+        self.assertTrue(report["labels_ready_for_prepare"])
+        self.assertEqual(report["accepted"], 0)
+        self.assertEqual(report["machine_checked"], 1)
+
     def setUp(self):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

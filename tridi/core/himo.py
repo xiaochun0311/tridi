@@ -74,7 +74,7 @@ def run_himo(cfg):
         raise ValueError("himo.supervision must be human_verified or a supported weak-label version")
     allow_weak = cfg.himo.supervision in WEAK_SUPERVISIONS
     if job == "inspect":
-        report = data_io.inspect(Path(cfg.himo.root), cfg.himo.annotations)
+        report = data_io.inspect(Path(cfg.himo.root), cfg.himo.annotations, allow_weak=allow_weak)
         save_json(out / "himo_inspection.json", report)
         print(json.dumps(report, ensure_ascii=False), flush=True)
     elif job == "diagnose":

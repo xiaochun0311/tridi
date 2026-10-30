@@ -85,7 +85,7 @@ CUDA_VISIBLE_DEVICES=0 "$TRIDI_PY" main.py -c config/env.yaml scenarios/himo_ord
 
 `conditions`从准备好的数据取一条**仅初态**条件，保存物体名、动作词表和表示协议，不包含未来目标。新场景可按相同结构构造条件文件，动作ID和表示协议必须与checkpoint一致。
 
-采样输出为`experiments/906_himo_sample/generation.pth`及`meshes/`：每帧一份人体、两份物体网格，另有正确52关节和网格清单。设`sample.target=tensors`可只保存参数。只接受已训练的`tridi-himo-ordered-v2`权重；旧TriDi、旧pair或诊断权重不能直接用于此采样入口。
+采样输出为`experiments/906_himo_sample/generation.pth`及`meshes/`：每帧一份人体、两份物体网格，另有正确52关节和网格清单。设`sample.target=tensors`可只保存参数。接受已训练的原生v2／v3权重；旧TriDi、旧pair或诊断权重不能直接用于此采样入口。v2固定恢复legacy激活，v3必须明确记录`model_profile`。
 
 本接入的接触标签采用5厘米近邻阈值，不代表精细抓握或无穿透。未建模静态支撑、液体和材料变化须保留为评估限制；采样没有IK、动作规则或逐样本姿态修正。
 
@@ -115,3 +115,22 @@ CUDA_VISIBLE_DEVICES=0 "$TRIDI_PY" main.py \
 新scenario明确设置`himo.supervision=weak_temporal_v1`，人体／物体／接触和动作条件全部参与学习，预算5000步、batch16、学习率1e-4，AdamW betas=(.95,.999)、weight_decay=1e-6。每50步保存进度与断点；每200步用固定最多32条验证样本、20步DDIM选择`best.pth`。训练后用40步DDIM在留出人物上比较初始化网络、训练网络与静止物体对照，报告姿态误差和接触指标。动作顺序交换仅检查条件敏感性，不能代替顺序正确性证明。
 
 共享GPU上实际运行使用输出目录内的启动脚本限制本进程显存；不要停止其他任务。接触预处理仍使用完整三角表面的5厘米精确阈值查询，仅减少不可能接触的三角候选，已与旧全局最近查询做过逐点等价检查。
+
+## 定位修复与目标关系弱标签v2
+
+`root_affine_v1`保留全部170个初始化权重，仅将人体平移解码头中的SiLU改为Identity，避免窄输出层在驻点附近失去输入敏感性。新训练的配置和CLI默认使用此profile；显式`himo.model_profile=legacy`可重现对照。v3权重保存激活profile，不能只改旧v2文件的标签来替代重新训练。
+
+`oracle`提供真实轴角→原生解码→网格导出重载检查；`smallfit`提供16／32条原训练样本的低噪声、高噪声和完整采样诊断。smallfit权重采用独立schema，不能当成正式生成模型。
+
+目标关系v2沿用605条记录完全相同的状态和划分，仅新增`approach_other_object`、`move_away_from_other_object`与另一物体的目标引用。标签基于真实规范网格表面质心、主物体贡献和距离路径筛选，保留全部v1证据；仍为`weak_temporal_v2 / machine_checked`，不代表放置、包含或接触语义。
+
+已有服务器v2准备文件，可运行：
+
+```bash
+"$TRIDI_PY" main.py -c config/env.yaml scenarios/himo_weak_train.yaml \
+  scenarios/himo_relations.yaml -- run.name=新训练名称
+```
+
+`himo.contact_weight`默认0。可微相对接触项只用于训练，以GT接触mask约束人体点在物体局部坐标中的位置；没有推理姿态修正。权重0.1的小样本对照损害了定位和几何接触，因此当前保留关闭，不能仅凭接触头F1提高就启用。
+
+本次完整修复实验、固定5000步权重与未修正网格位于服务器`outputs/himo-repair-20261030/`。对照分别报告人体位置、物体误差、实际几何接触和关系方向遵从，不将原综合分数的`best.pth`等同于所有指标最佳。
