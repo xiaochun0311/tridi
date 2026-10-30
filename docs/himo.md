@@ -33,7 +33,7 @@ TRIDI_PY=/home/yanghc/miniconda3/envs/tridi-offline/bin/python
 
 ## 2. 审核阶段标签并准备训练数据
 
-当前`outputs/himo-small-stage-20261029/stage_candidates.json`只有3条`pending_human_review`候选，均未分配train/val split；**正式训练尚未启动**。直接prepare或train会拒绝这些标签。
+人工审核路径中的`outputs/himo-small-stage-20261029/stage_candidates.json`仍保留3条`pending_human_review`候选，未分配train/val split。直接prepare或train会拒绝这些标签。另有用户授权的自动弱监督路径，见下节。
 
 人工逐条确认动作名称、完成帧、物体slot和用手后，将接受的完整记录另存为`stage_verified.json`。每条被明确接受的记录需要：
 
@@ -68,7 +68,7 @@ CUDA_VISIBLE_DEVICES=0 "$TRIDI_PY" main.py -c config/env.yaml scenarios/himo_ord
   train.max_steps=2000 dataloader.batch_size=4 optimizer.lr=0.0001
 ```
 
-`run.cpu=true`可改为CPU。训练输出为`experiments/904_himo_train/fit/`，包含`protocol.json`、`history.json`和`best.pth`；初始化采用TriDi权重，新增条件及接触头需要学习。当前不支持HIMO训练resume，每次使用新run名；2000步仅为小规模预算，不保证动作语义或泛化已学会。
+`run.cpu=true`可改为CPU。训练输出为`experiments/904_himo_train/fit/`，包含`protocol.json`、`history.json`、`best.pth`和可恢复的`last.pth`；初始化采用TriDi权重，新增条件及接触头需要学习。恢复时使用原run名并指定`resume.checkpoint=该目录/fit/last.pth`，数据SHA、监督类型及训练／评估参数必须保持一致；`train.max_steps`是累计总预算。2000步仅为小规模预算，不保证动作语义或泛化已学会。
 
 ## 4. 导出初始条件并采样
 
@@ -88,3 +88,30 @@ CUDA_VISIBLE_DEVICES=0 "$TRIDI_PY" main.py -c config/env.yaml scenarios/himo_ord
 采样输出为`experiments/906_himo_sample/generation.pth`及`meshes/`：每帧一份人体、两份物体网格，另有正确52关节和网格清单。设`sample.target=tensors`可只保存参数。只接受已训练的`tridi-himo-ordered-v2`权重；旧TriDi、旧pair或诊断权重不能直接用于此采样入口。
 
 本接入的接触标签采用5厘米近邻阈值，不代表精细抓握或无穿透。未建模静态支撑、液体和材料变化须保留为评估限制；采样没有IK、动作规则或逐样本姿态修正。
+
+## 自动弱监督首轮训练
+
+2026-10-30用户明确接受先自动扩充阶段标签再训练。此路径使用独立文件，不改动上述3条待人工审核候选；标签为`weak_temporal_v1`／`machine_checked`，不写成人工审核通过。
+
+统一算法在平滑后的真实两物体轨迹中寻找两个相邻、主物体明确的活动阶段，过滤跟踪跳变、复杂往返和含糊阶段，并用真实目标端点复核。动作仅为`move_object`、`rotate_object`、`move_and_rotate_object`；源文本仅保留为来源，不能据此声称模型学会喝水、抓握、放入或穿戴等细粒度语义。阈值、源文件SHA和选段证据随每条标签保存。
+
+本轮实际筛选605条：训练512、验证35、测试58。其中75条前后切换主物体，其余主要是同一物体的两个运动阶段；全部`target_slot=None`，没有监督“对目标物体B执行动作”的关系。权重记录训练中见过的目标引用，并拒绝没有监督的目标slot0／1，不能将此基线当作完整双物体任务语义模型。
+
+固定留出S01／S08／S16作验证、S02／S09／S20作测试，其余人物训练。每源序列至多一条；同一人物不跨集合。验证及测试动作必须在训练中出现。
+
+```bash
+"$TRIDI_PY" -m tridi.data.himo_weak \
+  --root data/raw/himo/unpacked-20261029/data \
+  --output outputs/himo-weak-20261030/stage_weak.json --seed 42 \
+  --max-train 512 --max-val 64 --max-test 64
+
+"$TRIDI_PY" main.py -c config/env.yaml scenarios/himo_weak_train.yaml -- \
+  run.job=prepare run.cpu=true
+
+CUDA_VISIBLE_DEVICES=0 "$TRIDI_PY" main.py \
+  -c config/env.yaml scenarios/himo_weak_train.yaml
+```
+
+新scenario明确设置`himo.supervision=weak_temporal_v1`，人体／物体／接触和动作条件全部参与学习，预算5000步、batch16、学习率1e-4，AdamW betas=(.95,.999)、weight_decay=1e-6。每50步保存进度与断点；每200步用固定最多32条验证样本、20步DDIM选择`best.pth`。训练后用40步DDIM在留出人物上比较初始化网络、训练网络与静止物体对照，报告姿态误差和接触指标。动作顺序交换仅检查条件敏感性，不能代替顺序正确性证明。
+
+共享GPU上实际运行使用输出目录内的启动脚本限制本进程显存；不要停止其他任务。接触预处理仍使用完整三角表面的5厘米精确阈值查询，仅减少不可能接触的三角候选，已与旧全局最近查询做过逐点等价检查。

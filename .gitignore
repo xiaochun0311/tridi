@@ -24,6 +24,7 @@ docs
 !tridi/data/
 tridi/data/*
 !tridi/data/himo_ordered.py
+!tridi/data/himo_weak.py
 !docs/
 docs/*
 !docs/himo.md

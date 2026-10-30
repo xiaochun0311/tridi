@@ -149,14 +149,19 @@ class NativeSceneGeometry:
         vertices = torch.as_tensor(np.asarray(self._mesh(name).vertices), dtype=torch.float32, device=self.device)
         return vertices @ self._rotations(pose[:6]).T + pose[6:]
 
-    @torch.no_grad()
-    def contact_distances(self, shape, human, object_pose, object_names):
+    def _contact_inputs(self, shape, human, object_pose, object_names):
         batch = len(shape)
         names = self._names(object_names, batch)
         pose = self._tensor(object_pose, (batch, 2, 2, 9), "object pose")
         rotations = self._rotations(pose[..., :6]).cpu().numpy()
         translation = pose[..., 6:].cpu().numpy()
         vertices = self.decode(shape, human)[0][:, :, self.indices].cpu().numpy()
+        return names, rotations, translation, vertices
+
+    @torch.no_grad()
+    def contact_distances(self, shape, human, object_pose, object_names):
+        names, rotations, translation, vertices = self._contact_inputs(shape, human, object_pose, object_names)
+        batch = len(names)
         distances = np.empty((batch, 2, 2, 690), dtype=np.float32)
         for b, pair in enumerate(names):
             for time in range(2):
@@ -171,9 +176,33 @@ class NativeSceneGeometry:
             raise ValueError("Nonfinite point-to-triangle contact distances")
         return torch.as_tensor(distances, dtype=torch.float32, device=self.device)
 
+    @staticmethod
+    def _surface_near(mesh, points, threshold):
+        # Threshold labels need only nearby triangles, not a global nearest query.
+        triangles, tree = mesh.triangles, mesh.triangles_tree
+        result = np.zeros(len(points), dtype=bool)
+        for index, point in enumerate(np.asarray(points, dtype=np.float64)):
+            candidates = np.fromiter(tree.intersection(np.r_[point - threshold, point + threshold]), dtype=np.int64)
+            for start in range(0, len(candidates), 4096):
+                ids = candidates[start:start + 4096]
+                nearest = trimesh.triangles.closest_point(triangles[ids], np.broadcast_to(point, (len(ids), 3)))
+                if not np.isfinite(nearest).all():
+                    raise ValueError("Nonfinite point-to-triangle contact query")
+                if np.any(np.square(nearest - point).sum(1) < threshold ** 2):
+                    result[index] = True
+                    break
+        return result
+
+    @torch.no_grad()
     def contacts(self, shape, human, object_pose, object_names):
-        distance = self.contact_distances(shape, human, object_pose, object_names)
-        return (distance < FIXED["contact_threshold_m"]).float()
+        names, rotations, translation, vertices = self._contact_inputs(shape, human, object_pose, object_names)
+        result = np.empty((len(names), 2, 2, 690), dtype=np.float32)
+        for b, pair in enumerate(names):
+            for time in range(2):
+                for slot, name in enumerate(pair):
+                    points = (vertices[b, time] - translation[b, time, slot]) @ rotations[b, time, slot]
+                    result[b, time, slot] = self._surface_near(self._mesh(name), points, FIXED["contact_threshold_m"])
+        return torch.as_tensor(result, dtype=torch.float32, device=self.device)
 
     @torch.no_grad()
     def export(self, prediction, object_names, outputdir):

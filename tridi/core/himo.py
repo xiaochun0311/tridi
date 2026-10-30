@@ -69,6 +69,9 @@ def run_himo(cfg):
     job = cfg.run.job
     prepared = Path(cfg.himo.prepared_data)
     device = "cpu" if cfg.run.cpu else "cuda"
+    if cfg.himo.supervision not in {"human_verified", "weak_temporal_v1"}:
+        raise ValueError("himo.supervision must be human_verified or weak_temporal_v1")
+    allow_weak = cfg.himo.supervision == "weak_temporal_v1"
     if job == "inspect":
         report = data_io.inspect(Path(cfg.himo.root), cfg.himo.annotations)
         save_json(out / "himo_inspection.json", report)
@@ -76,22 +79,24 @@ def run_himo(cfg):
     elif job == "diagnose":
         diagnose(cfg)
     elif job == "prepare":
-        data_io.prepare(Path(cfg.himo.root), Path(cfg.himo.annotations), geometry(cfg), prepared)
+        data_io.prepare(Path(cfg.himo.root), Path(cfg.himo.annotations), geometry(cfg), prepared, allow_weak=allow_weak)
         print(json.dumps(dict(prepared_data=str(prepared))), flush=True)
     elif job == "train":
-        if cfg.resume.checkpoint is not None:
-            raise ValueError("HIMO training resume is not implemented; use himo.initialization_checkpoint for TriDi initialization and a new run name")
         if not prepared.is_file():
-            data_io.prepare(Path(cfg.himo.root), Path(cfg.himo.annotations), geometry(cfg), prepared)
+            data_io.prepare(Path(cfg.himo.root), Path(cfg.himo.annotations), geometry(cfg), prepared, allow_weak=allow_weak)
         values = torch.load(prepared, map_location="cpu", weights_only=False)
-        validate_training_data(values)
+        validate_training_data(values, allow_weak=allow_weak)
         assert_same_representation(values["representation"], geometry(cfg, values["representation"]).protocol())
         cli.train(SimpleNamespace(data=prepared, output=out / "fit", steps=cfg.train.max_steps,
             initialization_checkpoint=Path(cfg.himo.initialization_checkpoint),
-            batch_size=cfg.dataloader.batch_size, lr=cfg.optimizer.lr, seed=cfg.run.seed, device=device))
+            batch_size=cfg.dataloader.batch_size, lr=cfg.optimizer.lr, seed=cfg.run.seed, device=device,
+            allow_weak=allow_weak, resume=None if cfg.resume.checkpoint is None else Path(cfg.resume.checkpoint),
+            eval_every=cfg.himo.eval_every, eval_steps=cfg.himo.eval_steps,
+            max_val_samples=cfg.himo.max_val_samples, log_every=cfg.himo.log_every,
+            weight_decay=cfg.optimizer.weight_decay, betas=tuple(cfg.optimizer.kwargs.get("betas", (.95, .999)))))
     elif job == "conditions":
         values = torch.load(prepared, map_location="cpu", weights_only=False)
-        validate_training_data(values)
+        validate_training_data(values, allow_weak=allow_weak)
         index = cfg.himo.condition_index
         if not 0 <= index < len(values["metadata"]):
             raise ValueError("himo.condition_index is outside prepared data")

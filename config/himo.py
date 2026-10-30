@@ -11,3 +11,8 @@ class HimoConfig:
     initialization_checkpoint: str = "${env.assets_folder}/gb_main.pth"
     conditions: Optional[str] = None
     condition_index: int = 0
+    supervision: str = "human_verified"
+    eval_every: int = 200
+    eval_steps: int = 20
+    max_val_samples: int = 32
+    log_every: int = 50

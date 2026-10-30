@@ -21,6 +21,14 @@ REFERENCE = Path(os.environ.get("HIMO_TEST_REFERENCE",
 
 
 class RigidTransformTest(unittest.TestCase):
+    def test_threshold_query_matches_global_triangle_distance(self):
+        mesh = trimesh.creation.icosphere(subdivisions=2, radius=.2)
+        points = np.random.default_rng(42).normal(0, .2, (150, 3))
+        points = np.vstack([points, np.asarray(mesh.vertices)[:5], [[10., 10., 10.]]])
+        distance = trimesh.proximity.closest_point(mesh, points)[1]
+        result = NativeSceneGeometry._surface_near(mesh, points, .05)
+        np.testing.assert_array_equal(result, distance < .05)
+
     def test_row6d_rotates_a_canonical_mesh_without_modification(self):
         geometry = NativeSceneGeometry.__new__(NativeSceneGeometry)
         geometry.device = torch.device("cpu")

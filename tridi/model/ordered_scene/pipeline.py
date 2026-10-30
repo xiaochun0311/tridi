@@ -75,7 +75,7 @@ def _validate_state(state, batch, label):
         _tensor(state[key], (batch, *shape), f"{label}.{key}")
 
 
-def validate_training_data(data, descriptor_dim=12):
+def validate_training_data(data, descriptor_dim=12, allow_weak=False):
     """Validate the recorded S0 -> S1 -> S2 supervision contract."""
     _keys(data, ("conditions", "targets", "metadata", "vocabulary", "representation"), "training data")
     validate_representation(data["representation"])
@@ -101,9 +101,18 @@ def validate_training_data(data, descriptor_dim=12):
         for key in ("subject", "sequence_id"):
             if not isinstance(row.get(key), str) or not row[key].strip():
                 raise ValueError(f"Each source record requires {key}")
-        if (row.get("two_task_objects") is not True or row.get("provenance") != "recorded"
-                or row.get("action_annotation") != "verified" or row.get("review_status") != "accepted_by_human"):
-            raise ValueError("Requires recorded two-task-object sequences with human-accepted verified action annotations")
+        human = row.get("action_annotation") == "verified" and row.get("review_status") == "accepted_by_human"
+        weak = (allow_weak and row.get("action_annotation") == "weak_temporal_v1"
+                and row.get("review_status") == "machine_checked")
+        if (row.get("status") == "pending" or row.get("two_task_objects") is not True
+                or row.get("provenance") != "recorded" or not (human or weak)):
+            raise ValueError("Requires recorded two-task-object sequences with human-verified labels or explicitly allowed weak_temporal_v1 labels")
+        if weak:
+            evidence = row.get("weak_labeling")
+            if (not isinstance(evidence, dict) or evidence.get("algorithm") != "weak_temporal_v1"
+                    or not isinstance(evidence.get("thresholds"), dict) or not evidence["thresholds"]
+                    or not isinstance(evidence.get("evidence"), dict) or not evidence["evidence"]):
+                raise ValueError("Weak labels require their algorithm, thresholds and nonempty evidence")
         initial, frames = row.get("initial_frame"), row.get("target_frames")
         if not isinstance(frames, (list, tuple)) or len(frames) != 2:
             raise ValueError("target_frames must identify S1 and S2")

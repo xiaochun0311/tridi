@@ -1,5 +1,6 @@
 """Synthetic unit fixtures check data boundaries; they are not research data."""
 from copy import deepcopy
+import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -117,6 +118,33 @@ class HIMODataTest(unittest.TestCase):
         self.assertEqual(report["processed"]["processed_2o/train"]["records"], 1)
         self.assertFalse(report["annotations"]["labels_ready_for_prepare"])
         self.assertEqual(self.row["status"], "pending_human_review")
+
+    def test_weak_requires_opt_in_and_preserves_machine_status(self):
+        row = deepcopy(self.row)
+        row.update(status="weak_temporal_v1", review_status="machine_checked", split="train",
+            weak_labeling=dict(algorithm="weak_temporal_v1", thresholds={"minimum_frames": 6},
+                evidence={"stages": [{"net_translation_m": .1}, {"net_translation_m": .2}]}),
+            source_caption="Recorded caption", source_text_sha256=hashlib.sha256(b"Recorded caption").hexdigest())
+        (self.root / "text/S01T001.txt").write_text("Recorded caption")
+        row["actions"][0]["action_id"] = "move_object"
+        row["actions"][1]["action_id"] = "rotate_object"
+        with self.assertRaisesRegex(ValueError, "human acceptance"):
+            prepare(self.root, {"candidates": [row]}, None, self.root / "strict.pth")
+        result = prepare(self.root, {"candidates": [row]}, GeometryFixture(), self.root / "weak.pth", allow_weak=True)
+        metadata = result["metadata"][0]
+        self.assertEqual(metadata["status"], "weak_temporal_v1")
+        self.assertEqual(metadata["action_annotation"], "weak_temporal_v1")
+        self.assertEqual(metadata["review_status"], "machine_checked")
+        self.assertEqual(metadata["weak_labeling"], row["weak_labeling"])
+        self.assertEqual(metadata["source_caption"], "Recorded caption")
+        for changed in (dict(row, status="pending_human_review"), dict(row, weak_labeling={}),
+                        dict(row, review_status="accepted_by_human")):
+            with self.assertRaisesRegex(ValueError, "human acceptance"):
+                prepare(self.root, {"candidates": [changed]}, None, self.root / "forged.pth", allow_weak=True)
+        other = deepcopy(row)
+        other.update(sequence="S01T002", split="val")
+        with self.assertRaisesRegex(ValueError, "subject-level isolation"):
+            prepare(self.root, {"candidates": [row, other]}, None, self.root / "leaked.pth", allow_weak=True)
 
 
 if __name__ == "__main__":

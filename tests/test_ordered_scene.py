@@ -2,12 +2,18 @@
 import os
 import unittest
 from copy import deepcopy
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
 from torch import nn
 
 from tridi.model.ordered_scene.model import OrderedSceneDenoiser
+from tridi.model.ordered_scene import cli
 from tridi.model.ordered_scene.pipeline import (
     STATE, STATE_SHAPES, diffusion_loss, reconstruction_loss, sample, sample_tri_timesteps,
     validate_conditions, validate_training_data,
@@ -127,6 +133,7 @@ class OrderedSceneContract(unittest.TestCase):
 
     def test_checkpoint_geometry_and_initial_object_bindings(self):
         saved = dict(schema=CHECKPOINT_SCHEMA, data_validated=True, training_steps=1,
+            supervision="human_verified",
             representation=representation(), vocabulary=["pick", "push", "place"], num_actions=3, descriptor_dim=12)
         payload = dict(conditions=conditions(), vocabulary=saved["vocabulary"], representation=representation(),
                        object_names=[["Cup", "Pot"], ["Glasses", "Case"]])
@@ -191,6 +198,141 @@ class OrderedSceneContract(unittest.TestCase):
         for key in STATE:
             self.assertTrue(torch.isfinite(real[key]).all())
             self.assertTrue(torch.equal(real[key], again[key]))
+
+
+def training_fixture():
+    cond, truth = conditions(), targets()
+    cond["action_ids"] = torch.tensor([[0, 1], [1, 0]])
+    return dict(conditions={key: torch.cat([value, value]) for key, value in cond.items()},
+        targets={key: torch.cat([value, value]) for key, value in truth.items()},
+        vocabulary=["move", "rotate", "unused"], representation=representation(),
+        metadata=[dict(subject=f"fixture_{i}", sequence_id=f"unit_{i}", split=split,
+            initial_frame=0, target_frames=[10, 20], two_task_objects=True, provenance="recorded",
+            action_annotation="verified", review_status="accepted_by_human")
+            for i, split in enumerate(["train", "train", "val", "val"])])
+
+
+class TinyTrainingHeads(nn.Module):
+    """Exercise real losses, optimizer moments and dropout RNG without the large transformer."""
+    def __init__(self, num_actions, descriptor_dim=12, checkpoint=None):
+        super().__init__()
+        self.anchor = nn.Parameter(torch.randn(4))
+        self.dropout = nn.Dropout(.25)
+        self.num_actions, self.descriptor_dim = num_actions, descriptor_dim
+
+    def forward(self, **batch):
+        return {key: self.anchor[i] + .01 * batch[key].tanh() + .01 * self.dropout(torch.ones_like(batch[key]))
+                for i, key in enumerate(STATE)}
+
+    def manifest(self):
+        return dict(test_fixture=True)
+
+
+class OrderedTrainingContract(unittest.TestCase):
+    def test_inference_rejects_target_relations_absent_from_training(self):
+        saved = dict(schema=CHECKPOINT_SCHEMA, data_validated=True, training_steps=1,
+            supervision="weak_temporal_v1", representation=representation(),
+            vocabulary=["move", "rotate", "unused"], num_actions=3, descriptor_dim=12,
+            condition_coverage=dict(action_targets_seen=[2]))
+        payload = dict(conditions=conditions(), vocabulary=saved["vocabulary"], representation=representation(),
+            object_names=[["Cup", "Pot"], ["Glasses", "Case"]])
+        payload["conditions"]["action_targets"].fill_(2)
+        self.assertEqual(validate_inference_payload(saved, payload), 2)
+        for slot in [0, 1]:
+            payload["conditions"]["action_targets"][0, 0] = slot
+            with self.assertRaisesRegex(ValueError, "not supervised"):
+                validate_inference_payload(saved, payload)
+        for seen in [[], [True], [3], ["2"], [2, 2]]:
+            with self.assertRaises(ValueError):
+                validate_checkpoint(dict(saved, condition_coverage=dict(action_targets_seen=seen)))
+
+    def test_weak_annotations_require_opt_in_and_machine_evidence(self):
+        data = training_fixture()
+        for row in data["metadata"]:
+            row.update(action_annotation="weak_temporal_v1", review_status="machine_checked",
+                status="weak_temporal_v1", weak_labeling=dict(algorithm="weak_temporal_v1",
+                thresholds={"translation_m": .03}, evidence={"observed_stage_count": 2}))
+        with self.assertRaises(ValueError):
+            validate_training_data(data)
+        self.assertEqual(validate_training_data(data, allow_weak=True), 4)
+        missing = deepcopy(data)
+        del missing["metadata"][0]["weak_labeling"]["evidence"]
+        with self.assertRaises(ValueError):
+            validate_training_data(missing, allow_weak=True)
+        data["metadata"][0]["status"] = "pending"
+        with self.assertRaises(ValueError):
+            validate_training_data(data, allow_weak=True)
+
+    def test_closed_set_validation_rejects_unseen_actions(self):
+        data = training_fixture()
+        data["conditions"]["action_ids"][2, 0] = 2
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "data.pth"
+            torch.save(data, path)
+            args = SimpleNamespace(data=path, output=root / "fit", steps=2, batch_size=2, lr=1e-3)
+            with self.assertRaisesRegex(ValueError, "Closed-set"):
+                cli.train(args)
+            self.assertFalse(args.output.exists())
+
+    def test_resume_preserves_optimizer_clocks_dropout_rng_and_validation(self):
+        torch.set_num_threads(2)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "data.pth"
+            data = training_fixture()
+            for row in data["metadata"]:
+                row.update(action_annotation="weak_temporal_v1", review_status="machine_checked",
+                    weak_labeling=dict(algorithm="weak_temporal_v1", thresholds={"translation_m": .03},
+                    evidence={"observed_stage_count": 2}))
+            torch.save(data, path)
+            args = SimpleNamespace(data=path, output=root / "full", steps=4, batch_size=2, lr=1e-3,
+                initialization_checkpoint=None, seed=71, device="cpu", allow_weak=True,
+                eval_every=2, eval_steps=2, max_val_samples=1, log_every=1)
+            with patch.object(cli, "OrderedSceneDenoiser", TinyTrainingHeads), redirect_stdout(StringIO()):
+                with patch.object(cli, "sample", wraps=cli.sample) as sampler:
+                    cli.train(args)
+                    self.assertTrue(all(len(call.args[1]["action_ids"]) == 1 and call.kwargs["steps"] == 2
+                                        for call in sampler.call_args_list))
+                full = torch.load(args.output / "last.pth", weights_only=False)
+                args.output = root / "resumed"
+                original_loss, calls = cli.diffusion_loss, 0
+
+                def interrupt_after_two(*values, **kwargs):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 3:
+                        raise RuntimeError("simulated interruption")
+                    return original_loss(*values, **kwargs)
+
+                with patch.object(cli, "diffusion_loss", side_effect=interrupt_after_two):
+                    with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+                        cli.train(args)
+                args.resume = args.output / "last.pth"
+                interrupted = torch.load(args.resume, weights_only=False)
+                self.assertEqual(interrupted["training_steps"], 2)
+                cli.train(args)
+                resumed = torch.load(args.resume, weights_only=False)
+                self.assertEqual(resumed["training_steps"], 4)
+                self.assertEqual(resumed["history"], full["history"])
+                self.assertEqual(resumed["supervision"], "weak_temporal_v1")
+                self.assertEqual(resumed["optimizer"]["param_groups"][0]["betas"], (.95, .999))
+                self.assertEqual(resumed["optimizer"]["param_groups"][0]["weight_decay"], 1e-6)
+                for key in full["model"]:
+                    self.assertTrue(torch.equal(full["model"][key], resumed["model"][key]))
+                for name in ["generator_state", "torch_rng_state"]:
+                    self.assertTrue(torch.equal(full[name], resumed[name]))
+                for index, values in full["optimizer"]["state"].items():
+                    for name, value in values.items():
+                        self.assertTrue(torch.equal(value, resumed["optimizer"]["state"][index][name]))
+                args.steps, args.lr = 6, 2e-3
+                with self.assertRaisesRegex(ValueError, "identical data"):
+                    cli.train(args)
+                args.lr = 1e-3
+                data["conditions"]["descriptors"][0, 0, 0] += .1
+                torch.save(data, path)
+                with self.assertRaisesRegex(ValueError, "identical data"):
+                    cli.train(args)
 
 
 if __name__ == "__main__":

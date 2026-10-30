@@ -1,4 +1,4 @@
-"""Read native HIMO data; only human-accepted stages can become supervision."""
+"""Read native HIMO states with explicit human or opt-in weak supervision."""
 from collections import Counter
 from copy import deepcopy
 import hashlib
@@ -137,21 +137,38 @@ def load_triplet(root, row):
         split=row.get("split"), source_files=dict(smplx=str(source), object_pose=str(object_path)),
         source_sha256=hashes, actions=deepcopy(actions), limitations=deepcopy(row.get("limitations", [])),
         physical_scene_complete=row.get("physical_scene_complete"))
+    if "source_text_sha256" in row:
+        text_path = root / "text" / f"{sequence}.txt"
+        metadata["source_sha256"]["text"] = _sha(text_path, row["source_text_sha256"])
+        metadata["source_files"]["text"] = str(text_path)
+    for key in ("status", "weak_labeling", "source_caption", "source_text_sha256"):
+        if key in row:
+            metadata[key] = deepcopy(row[key])
     return dict(conditions=dict(initial_object_pose=object_states[0]),
                 targets=dict(shape=torch.as_tensor(beta.copy(), dtype=torch.float32), human=human,
                              object_pose=object_states[1:]), metadata=metadata, object_names=names)
 
 
-def prepare(root, annotations, geometry, output):
-    """Export training tensors only after explicit human review and split assignment."""
+def prepare(root, annotations, geometry, output, allow_weak=False):
+    """Export accepted labels, or exact machine-checked labels with explicit opt-in."""
     rows = _annotations(annotations)
     output = Path(output)
     if output.exists():
         raise ValueError("Use a new prepared-data path")
-    groups = {}
+    groups, subjects = {}, {}
+    weak_dataset = any(row.get("status") == "weak_temporal_v1" for row in rows)
     for row in rows:
-        if row.get("status") != "verified" or row.get("review_status") != "accepted_by_human":
+        accepted = row.get("status") == "verified" and row.get("review_status") == "accepted_by_human"
+        weak = row.get("status") == "weak_temporal_v1" and row.get("review_status") == "machine_checked"
+        evidence = row.get("weak_labeling", {})
+        valid_weak = (isinstance(evidence, dict) and evidence.get("algorithm") == "weak_temporal_v1"
+            and isinstance(evidence.get("thresholds"), dict) and bool(evidence["thresholds"])
+            and isinstance(evidence.get("evidence"), dict) and bool(evidence["evidence"]))
+        if not accepted and not (allow_weak and weak and valid_weak):
             raise ValueError("Pending/rejected stage labels cannot be prepared for training; human acceptance is required")
+        if weak and any(action.get("action_id") not in {"move_object", "rotate_object", "move_and_rotate_object"}
+                        for action in row.get("actions", [])):
+            raise ValueError("Weak kinematic labels only support observable object movement/rotation actions")
         split = row.get("split")
         if split not in {"train", "val", "test"}:
             raise ValueError("Each accepted annotation requires an explicit train/val/test split")
@@ -159,6 +176,10 @@ def prepare(root, annotations, geometry, output):
         if key in groups and groups[key] != split:
             raise ValueError("An original recorded sequence cannot cross data splits")
         groups[key] = split
+        subject = str(key).split("T")[0]
+        if weak_dataset and subject in subjects and subjects[subject] != split:
+            raise ValueError("Weak supervision requires subject-level isolation across data splits")
+        subjects[subject] = split
     triplets = [load_triplet(root, row) for row in rows]
     names = [item["object_names"] for item in triplets]
     vocabulary = sorted({action["action_id"] for row in rows for action in row["actions"]})
@@ -179,7 +200,7 @@ def prepare(root, annotations, geometry, output):
     result = dict(conditions=conditions, targets=targets, metadata=metadata, vocabulary=vocabulary,
                   representation=geometry.protocol())
     from tridi.model.ordered_scene.pipeline import validate_training_data
-    validate_training_data(result)
+    validate_training_data(result, allow_weak=allow_weak)
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(result, output)
     return result
