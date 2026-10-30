@@ -19,3 +19,11 @@ data
 outputs
 scripts
 docs
+
+# Keep the HIMO adapter and guide visible without tracking data artifacts.
+!tridi/data/
+tridi/data/*
+!tridi/data/himo_ordered.py
+!docs/
+docs/*
+!docs/himo.md

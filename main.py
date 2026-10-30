@@ -27,6 +27,13 @@ def main():
     # Set random seed
     training_utils.set_seed(cfg.run.seed)
 
+    if "himo" in cfg.run.datasets:
+        if list(cfg.run.datasets) != ["himo"]:
+            raise ValueError("Native HIMO SMPL-X cannot be mixed with legacy SMPL-H datasets")
+        from tridi.core.himo import run_himo
+        run_himo(cfg)
+        return
+
     if cfg.run.job in ['train', 'sample']:
         # Model
         model = get_model(cfg)

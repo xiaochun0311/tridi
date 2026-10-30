@@ -1,0 +1,26 @@
+run:
+  name: himo_ordered
+  datasets: [himo]
+  job: inspect
+  cpu: true
+
+logging:
+  wandb: false
+
+dataloader:
+  batch_size: 4
+  workers: 0
+
+train:
+  max_steps: 2000
+
+sample:
+  num_inference_steps: 40
+  target: meshes
+
+himo:
+  root: ${env.raw_datasets_folder}/himo/unpacked-20261029/data
+  annotations: ./outputs/himo-small-stage-20261029/stage_candidates.json
+  prepared_data: ${env.datasets_folder}/himo_ordered.pth
+  contact_indices: ${env.datasets_folder}/himo_smplx_indices.npy
+  initialization_checkpoint: ${env.assets_folder}/gb_main.pth

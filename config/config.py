@@ -6,6 +6,7 @@ import os
 from .datasets import BehaveConfig, GrabConfig, InterCapConfig, OmomoConfig, CustomDatasetConfig
 from .model import ConditioningModelConfig, DenoisingModelConfig, TriDiModelConfig
 from .environment import EnvironmentConfig
+from .himo import HimoConfig
 
 # ========================== RUN =============================
 @dataclass
@@ -119,6 +120,7 @@ class EvalConfig:
 
 @dataclass
 class ProjectConfig:
+    himo: HimoConfig = HimoConfig()
     behave: BehaveConfig = BehaveConfig()
     grab: GrabConfig = GrabConfig()
     intercap: InterCapConfig = InterCapConfig()

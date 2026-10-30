@@ -69,6 +69,10 @@ def init_exp(arguments):
     else:
         cli_config = None
 
+    # Resolve the CLI output root before locating or creating the experiment.
+    if cli_config is not None and "env" in cli_config and "experiments_folder" in cli_config.env:
+        config.env.experiments_folder = cli_config.env.experiments_folder
+
     # Fix absolute path
     config.env.experiments_folder = str(Path(config.env.experiments_folder).resolve())
 
