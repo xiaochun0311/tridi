@@ -176,7 +176,8 @@ def evaluate(args):
     if count:
         for name, values in (("trained", trained), ("recorded", recorded)):
             geometry.export({key: value[:count] for key, value in values.items()}, names[:count], args.output / (name + "_meshes"))
-    _plot(report, args.output / "heldout_comparison.png")
+    if not args.skip_plot:
+        _plot(report, args.output / "heldout_comparison.png")
     print(json.dumps(dict(output=str(args.output), test_scenes=len(ids), trained=report["trained"]["mean"])), flush=True)
     return report
 
@@ -192,6 +193,7 @@ def main():
     parser.add_argument("--batch-size", default=8, type=int)
     parser.add_argument("--export-count", default=4, type=int)
     parser.add_argument("--allow-weak", action="store_true")
+    parser.add_argument("--skip-plot", action="store_true", help="Export metrics and meshes without requiring matplotlib")
     args = parser.parse_args()
     torch.set_num_threads(2)
     try:
