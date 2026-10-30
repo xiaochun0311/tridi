@@ -16,3 +16,4 @@ class HimoConfig:
     eval_steps: int = 20
     max_val_samples: int = 32
     log_every: int = 50
+    model_profile: str = "legacy"

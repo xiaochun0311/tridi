@@ -12,11 +12,17 @@ from torch import nn
 from tridi.model.denoising.transformer_uni_3 import Projection, TransformertUni3WayModel
 
 
+MODEL_PROFILES = ("legacy", "root_affine_v1")
+
+
 class OrderedSceneDenoiser(nn.Module):
-    def __init__(self, num_actions, descriptor_dim=12, checkpoint="assets/gb_main.pth"):
+    def __init__(self, num_actions, descriptor_dim=12, checkpoint="assets/gb_main.pth", model_profile="legacy"):
         super().__init__()
         if num_actions < 1:
             raise ValueError("A training-defined action vocabulary is required")
+        if model_profile not in MODEL_PROFILES:
+            raise ValueError(f"Unknown ordered model profile: {model_profile}")
+        self.model_profile = model_profile
         self.num_actions, self.descriptor_dim = num_actions, descriptor_dim
         self.core = TransformertUni3WayModel(
             dim_sbj=325, dim_obj=9, dim_contact=128, dim_cond=1064,
@@ -32,6 +38,10 @@ class OrderedSceneDenoiser(nn.Module):
             self.initialization = dict(checkpoint=str(Path(checkpoint).resolve()),
                 sha256=hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest(),
                 strictly_loaded_tensors=len(state))
+
+        # Preserve every loaded tensor and RNG draw; remove only the narrow SiLU range constraint.
+        if model_profile == "root_affine_v1":
+            self.core.decoder_S_transl.projection[1] = nn.Identity()
 
         # Keep the unused legacy condition/contact-AE modules frozen.
         self.core.requires_grad_(False)
@@ -107,6 +117,7 @@ class OrderedSceneDenoiser(nn.Module):
 
     def manifest(self):
         return dict(**self.initialization, num_actions=self.num_actions, descriptor_dim=self.descriptor_dim,
+            model_profile=self.model_profile,
             total_parameters=sum(p.numel() for p in self.parameters()),
             trainable_parameters=sum(p.numel() for p in self.parameters() if p.requires_grad),
             prediction_type="sample (clean x0)", token_count=28,

@@ -39,7 +39,8 @@ def diagnose(cfg):
         action_ids=torch.tensor([[vocabulary.index(action["action_id"]) for action in row["actions"]]], device=device),
         action_objects=torch.tensor([[action["object_slot"] for action in row["actions"]]], device=device),
         action_targets=torch.tensor([[2 if action["target_slot"] is None else action["target_slot"] for action in row["actions"]]], device=device))
-    model = OrderedSceneDenoiser(len(vocabulary), checkpoint=cfg.himo.initialization_checkpoint).to(device)
+    model = OrderedSceneDenoiser(len(vocabulary), checkpoint=cfg.himo.initialization_checkpoint,
+        model_profile=cfg.himo.model_profile).to(device)
     loss = diffusion_loss(model, target, conditions, torch.tensor([[200, 600, 900]], device=device))
     loss.backward()
     gradients = {name: float(sum((p.grad.abs().sum().item() for p in module.parameters() if p.grad is not None), 0.))
@@ -93,7 +94,8 @@ def run_himo(cfg):
             allow_weak=allow_weak, resume=None if cfg.resume.checkpoint is None else Path(cfg.resume.checkpoint),
             eval_every=cfg.himo.eval_every, eval_steps=cfg.himo.eval_steps,
             max_val_samples=cfg.himo.max_val_samples, log_every=cfg.himo.log_every,
-            weight_decay=cfg.optimizer.weight_decay, betas=tuple(cfg.optimizer.kwargs.get("betas", (.95, .999)))))
+            weight_decay=cfg.optimizer.weight_decay, betas=tuple(cfg.optimizer.kwargs.get("betas", (.95, .999))),
+            model_profile=cfg.himo.model_profile))
     elif job == "conditions":
         values = torch.load(prepared, map_location="cpu", weights_only=False)
         validate_training_data(values, allow_weak=allow_weak)

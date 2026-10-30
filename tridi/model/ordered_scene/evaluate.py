@@ -7,7 +7,7 @@ from pathlib import Path
 
 import torch
 
-from .cli import validate_checkpoint, validate_inference_payload
+from .cli import checkpoint_model_profile, validate_checkpoint, validate_inference_payload
 from .geometry import NativeSceneGeometry
 from .model import OrderedSceneDenoiser
 from .pipeline import STATE, sample, validate_training_data
@@ -115,6 +115,7 @@ def evaluate(args):
     validate_training_data(data, allow_weak=args.allow_weak)
     saved = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     validate_checkpoint(saved)
+    model_profile = checkpoint_model_profile(saved)
     if hashlib.sha256(args.data.read_bytes()).hexdigest() != saved.get("data_sha256"):
         raise ValueError("Evaluation data must match the checkpoint's declared training dataset")
     assert_same_representation(saved["representation"], data["representation"])
@@ -132,14 +133,16 @@ def evaluate(args):
         raise ValueError("Recorded object names do not match initial geometry descriptors")
     recorded = {key: value[ids].cpu() for key, value in data["targets"].items()}
     recorded_joints = geometry.decode(recorded["shape"], recorded["human"])[1]
-    model = OrderedSceneDenoiser(saved["num_actions"], saved["descriptor_dim"], checkpoint=None).to(args.device)
+    model = OrderedSceneDenoiser(saved["num_actions"], saved["descriptor_dim"], checkpoint=None,
+        model_profile=model_profile).to(args.device)
     model.load_state_dict(saved["model"], strict=True)
     trained = _generate(model, conditions, args.seed, args.steps, args.batch_size)
     swapped_conditions = swap_actions(conditions)
     swapped = _generate(model, swapped_conditions, args.seed, args.steps, args.batch_size)
     del model
     torch.manual_seed(saved["training_seed"])
-    model = OrderedSceneDenoiser(saved["num_actions"], saved["descriptor_dim"], checkpoint=args.initialization_checkpoint).to(args.device)
+    model = OrderedSceneDenoiser(saved["num_actions"], saved["descriptor_dim"], checkpoint=args.initialization_checkpoint,
+        model_profile=model_profile).to(args.device)
     initialized = _generate(model, conditions, args.seed, args.steps, args.batch_size)
     metrics = {name: scene_metrics(prediction, recorded, geometry.decode(prediction["shape"], prediction["human"])[1], recorded_joints)
                for name, prediction in (("initialized", initialized), ("trained", trained), ("swapped_actions", swapped))}
@@ -150,6 +153,7 @@ def evaluate(args):
                            for key in ("action_ids", "action_objects", "action_targets")]).any(0)
     alteration = 1000 * torch.linalg.vector_norm(trained["object_pose"][..., 6:] - swapped["object_pose"][..., 6:], dim=-1).mean((1, 2))
     report = dict(supervision=saved.get("supervision", "unspecified"), training_steps=saved["training_steps"],
+        model_profile=model_profile,
         checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(), data_sha256=saved["data_sha256"],
         initialization=initialization, initialization_seed=saved["training_seed"], sampling_seed=args.seed,
         sampling_steps=args.steps, sampling_batch_size=args.batch_size, test_scenes_evaluated=len(ids),

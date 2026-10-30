@@ -18,7 +18,10 @@ from tridi.model.ordered_scene.pipeline import (
     STATE, STATE_SHAPES, diffusion_loss, reconstruction_loss, sample, sample_tri_timesteps,
     validate_conditions, validate_training_data,
 )
-from tridi.model.ordered_scene.cli import CHECKPOINT_SCHEMA, validate_checkpoint, validate_inference_payload
+from tridi.model.ordered_scene.cli import (
+    CHECKPOINT_SCHEMA, LEGACY_CHECKPOINT_SCHEMA, checkpoint_model_profile,
+    validate_checkpoint, validate_inference_payload,
+)
 from tridi.model.ordered_scene.protocol import FIXED, index_sha256
 
 
@@ -133,7 +136,7 @@ class OrderedSceneContract(unittest.TestCase):
 
     def test_checkpoint_geometry_and_initial_object_bindings(self):
         saved = dict(schema=CHECKPOINT_SCHEMA, data_validated=True, training_steps=1,
-            supervision="human_verified",
+            supervision="human_verified", model_profile="legacy",
             representation=representation(), vocabulary=["pick", "push", "place"], num_actions=3, descriptor_dim=12)
         payload = dict(conditions=conditions(), vocabulary=saved["vocabulary"], representation=representation(),
                        object_names=[["Cup", "Pot"], ["Glasses", "Case"]])
@@ -214,11 +217,12 @@ def training_fixture():
 
 class TinyTrainingHeads(nn.Module):
     """Exercise real losses, optimizer moments and dropout RNG without the large transformer."""
-    def __init__(self, num_actions, descriptor_dim=12, checkpoint=None):
+    def __init__(self, num_actions, descriptor_dim=12, checkpoint=None, model_profile="legacy"):
         super().__init__()
         self.anchor = nn.Parameter(torch.randn(4))
         self.dropout = nn.Dropout(.25)
         self.num_actions, self.descriptor_dim = num_actions, descriptor_dim
+        self.model_profile = model_profile
 
     def forward(self, **batch):
         return {key: self.anchor[i] + .01 * batch[key].tanh() + .01 * self.dropout(torch.ones_like(batch[key]))
@@ -229,9 +233,25 @@ class TinyTrainingHeads(nn.Module):
 
 
 class OrderedTrainingContract(unittest.TestCase):
+    def test_checkpoint_profile_is_explicit_and_legacy_cannot_claim_affine(self):
+        saved = dict(schema=CHECKPOINT_SCHEMA, data_validated=True, training_steps=1,
+            supervision="human_verified", model_profile="root_affine_v1", representation=representation(),
+            vocabulary=["move"], num_actions=1, descriptor_dim=12)
+        self.assertEqual(checkpoint_model_profile(validate_checkpoint(saved)), "root_affine_v1")
+        missing = dict(saved)
+        del missing["model_profile"]
+        with self.assertRaisesRegex(ValueError, "model_profile"):
+            validate_checkpoint(missing)
+        old = dict(missing, schema=LEGACY_CHECKPOINT_SCHEMA)
+        self.assertEqual(checkpoint_model_profile(validate_checkpoint(old)), "legacy")
+        with self.assertRaisesRegex(ValueError, "Legacy v2"):
+            validate_checkpoint(dict(old, model_profile="root_affine_v1"))
+        with self.assertRaises(ValueError):
+            validate_checkpoint(dict(saved, model_profile="unknown"))
+
     def test_inference_rejects_target_relations_absent_from_training(self):
         saved = dict(schema=CHECKPOINT_SCHEMA, data_validated=True, training_steps=1,
-            supervision="weak_temporal_v1", representation=representation(),
+            supervision="weak_temporal_v1", model_profile="legacy", representation=representation(),
             vocabulary=["move", "rotate", "unused"], num_actions=3, descriptor_dim=12,
             condition_coverage=dict(action_targets_seen=[2]))
         payload = dict(conditions=conditions(), vocabulary=saved["vocabulary"], representation=representation(),
@@ -316,6 +336,7 @@ class OrderedTrainingContract(unittest.TestCase):
                 self.assertEqual(resumed["training_steps"], 4)
                 self.assertEqual(resumed["history"], full["history"])
                 self.assertEqual(resumed["supervision"], "weak_temporal_v1")
+                self.assertEqual(resumed["model_profile"], "legacy")
                 self.assertEqual(resumed["optimizer"]["param_groups"][0]["betas"], (.95, .999))
                 self.assertEqual(resumed["optimizer"]["param_groups"][0]["weight_decay"], 1e-6)
                 for key in full["model"]:
@@ -329,10 +350,44 @@ class OrderedTrainingContract(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "identical data"):
                     cli.train(args)
                 args.lr = 1e-3
+                args.model_profile = "root_affine_v1"
+                with self.assertRaisesRegex(ValueError, "identical data"):
+                    cli.train(args)
+                args.model_profile = "legacy"
                 data["conditions"]["descriptors"][0, 0, 0] += .1
                 torch.save(data, path)
                 with self.assertRaisesRegex(ValueError, "identical data"):
                     cli.train(args)
+
+
+class OrderedModelProfileContract(unittest.TestCase):
+    def test_affine_profile_preserves_weights_rng_and_only_changes_root_decoder(self):
+        torch.set_num_threads(2)
+        torch.manual_seed(811)
+        legacy = OrderedSceneDenoiser(3, checkpoint=None, model_profile="legacy").eval()
+        rng = torch.get_rng_state().clone()
+        torch.manual_seed(811)
+        affine = OrderedSceneDenoiser(3, checkpoint=None, model_profile="root_affine_v1").eval()
+        self.assertTrue(torch.equal(rng, torch.get_rng_state()))
+        self.assertEqual(set(legacy.state_dict()), set(affine.state_dict()))
+        for name, value in legacy.state_dict().items():
+            self.assertTrue(torch.equal(value, affine.state_dict()[name]), name)
+        self.assertIsInstance(legacy.core.decoder_S_transl.projection[1], nn.SiLU)
+        self.assertIsInstance(affine.core.decoder_S_transl.projection[1], nn.Identity)
+        self.assertEqual(affine.manifest()["model_profile"], "root_affine_v1")
+        cond, state, t = conditions(), targets(), torch.tensor([500, 500])
+        with torch.no_grad():
+            first = legacy(**state, **cond, t=t)
+            second = affine(**state, **cond, t=t)
+        for name in ("shape", "object_pose", "contact"):
+            torch.testing.assert_close(first[name], second[name], atol=0, rtol=0)
+        torch.testing.assert_close(first["human"][..., :312], second["human"][..., :312], atol=0, rtol=0)
+        self.assertGreater(float((first["human"][..., 312:] - second["human"][..., 312:]).abs().max()), 1e-4)
+        # The affine profile can represent intermediate values below SiLU's global minimum.
+        required = torch.full((2, 3), -2.)
+        desired = affine.core.decoder_S_transl.projection[2](required)
+        restored = affine.core.decoder_S_transl.projection[2](affine.core.decoder_S_transl.projection[1](required))
+        torch.testing.assert_close(restored, desired, atol=0, rtol=0)
 
 
 if __name__ == "__main__":
