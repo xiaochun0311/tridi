@@ -156,19 +156,30 @@ def prepare(root, annotations, geometry, output, allow_weak=False):
     if output.exists():
         raise ValueError("Use a new prepared-data path")
     groups, subjects = {}, {}
-    weak_dataset = any(row.get("status") == "weak_temporal_v1" for row in rows)
+    weak_versions = {"weak_temporal_v1", "weak_temporal_v2"}
+    kinematic_actions = {"move_object", "rotate_object", "move_and_rotate_object"}
+    relation_actions = {"approach_other_object", "move_away_from_other_object"}
+    weak_dataset = any(row.get("status") in weak_versions for row in rows)
     for row in rows:
         accepted = row.get("status") == "verified" and row.get("review_status") == "accepted_by_human"
-        weak = row.get("status") == "weak_temporal_v1" and row.get("review_status") == "machine_checked"
+        weak = row.get("status") in weak_versions and row.get("review_status") == "machine_checked"
         evidence = row.get("weak_labeling", {})
-        valid_weak = (isinstance(evidence, dict) and evidence.get("algorithm") == "weak_temporal_v1"
+        valid_weak = (isinstance(evidence, dict) and evidence.get("algorithm") == row.get("status")
             and isinstance(evidence.get("thresholds"), dict) and bool(evidence["thresholds"])
             and isinstance(evidence.get("evidence"), dict) and bool(evidence["evidence"]))
         if not accepted and not (allow_weak and weak and valid_weak):
             raise ValueError("Pending/rejected stage labels cannot be prepared for training; human acceptance is required")
-        if weak and any(action.get("action_id") not in {"move_object", "rotate_object", "move_and_rotate_object"}
-                        for action in row.get("actions", [])):
-            raise ValueError("Weak kinematic labels only support observable object movement/rotation actions")
+        if weak:
+            allowed = kinematic_actions | relation_actions if row["status"] == "weak_temporal_v2" else kinematic_actions
+            for action in row.get("actions", []):
+                if action.get("action_id") not in allowed:
+                    raise ValueError("Weak action is incompatible with the declared labeling version")
+                if type(action.get("object_slot")) is not int or action["object_slot"] not in (0, 1):
+                    raise ValueError("Weak actions require an explicit object slot 0 or 1")
+                target = action.get("target_slot")
+                expected = 1 - action["object_slot"] if action["action_id"] in relation_actions else None
+                if target != expected or (expected is not None and type(target) is not int):
+                    raise ValueError("Weak relation targets must reference the other object; kinematic targets must be None")
         split = row.get("split")
         if split not in {"train", "val", "test"}:
             raise ValueError("Each accepted annotation requires an explicit train/val/test split")

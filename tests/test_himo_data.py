@@ -128,6 +128,7 @@ class HIMODataTest(unittest.TestCase):
         (self.root / "text/S01T001.txt").write_text("Recorded caption")
         row["actions"][0]["action_id"] = "move_object"
         row["actions"][1]["action_id"] = "rotate_object"
+        row["actions"][1]["target_slot"] = None
         with self.assertRaisesRegex(ValueError, "human acceptance"):
             prepare(self.root, {"candidates": [row]}, None, self.root / "strict.pth")
         result = prepare(self.root, {"candidates": [row]}, GeometryFixture(), self.root / "weak.pth", allow_weak=True)
@@ -145,6 +146,32 @@ class HIMODataTest(unittest.TestCase):
         other.update(sequence="S01T002", split="val")
         with self.assertRaisesRegex(ValueError, "subject-level isolation"):
             prepare(self.root, {"candidates": [row, other]}, None, self.root / "leaked.pth", allow_weak=True)
+
+    def test_v2_versions_and_relation_target_contract(self):
+        row = deepcopy(self.row)
+        row.update(status="weak_temporal_v2", review_status="machine_checked", split="train",
+            weak_labeling=dict(algorithm="weak_temporal_v2", thresholds={"distance_m": .05}, evidence={"stages": [{"relation": True}]}))
+        row["actions"][0].update(action_id="approach_other_object", object_slot=0, target_slot=1)
+        row["actions"][1].update(action_id="rotate_object", object_slot=0, target_slot=None)
+        with self.assertRaisesRegex(ValueError, "human acceptance"):
+            prepare(self.root, {"candidates": [row]}, None, self.root / "strict_v2.pth")
+        result = prepare(self.root, {"candidates": [row]}, GeometryFixture(), self.root / "v2.pth", allow_weak=True)
+        self.assertEqual(result["conditions"]["action_targets"].tolist(), [[1, 2]])
+        self.assertEqual(result["metadata"][0]["weak_labeling"], row["weak_labeling"])
+        mixed = deepcopy(row)
+        mixed["weak_labeling"]["algorithm"] = "weak_temporal_v1"
+        with self.assertRaisesRegex(ValueError, "human acceptance"):
+            prepare(self.root, {"candidates": [mixed]}, None, self.root / "mixed.pth", allow_weak=True)
+        v1 = deepcopy(row)
+        v1.update(status="weak_temporal_v1")
+        v1["weak_labeling"]["algorithm"] = "weak_temporal_v1"
+        with self.assertRaisesRegex(ValueError, "incompatible"):
+            prepare(self.root, {"candidates": [v1]}, None, self.root / "v1_rel.pth", allow_weak=True)
+        for index, target in ((0, None), (0, 0), (1, 1)):
+            invalid = deepcopy(row)
+            invalid["actions"][index]["target_slot"] = target
+            with self.assertRaisesRegex(ValueError, "targets"):
+                prepare(self.root, {"candidates": [invalid]}, None, self.root / "target.pth", allow_weak=True)
 
 
 if __name__ == "__main__":

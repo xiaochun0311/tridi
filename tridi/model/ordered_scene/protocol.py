@@ -4,6 +4,9 @@ import re
 import struct
 
 
+WEAK_SUPERVISIONS = frozenset({"weak_temporal_v1", "weak_temporal_v2"})
+
+
 FIXED = dict(schema="himo-native-smplx-v1", body_model="smplx", gender="neutral",
              num_betas=10, num_vertices=10475, units="m", use_pca=False,
              pose_layout="global_body_left_right_row6d_translation", face_policy="zero",

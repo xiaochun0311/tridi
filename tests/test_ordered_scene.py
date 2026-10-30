@@ -14,6 +14,7 @@ from torch import nn
 
 from tridi.model.ordered_scene.model import OrderedSceneDenoiser
 from tridi.model.ordered_scene import cli
+from tridi.model.ordered_scene import pipeline
 from tridi.model.ordered_scene.pipeline import (
     STATE, STATE_SHAPES, diffusion_loss, reconstruction_loss, sample, sample_tri_timesteps,
     validate_conditions, validate_training_data,
@@ -23,6 +24,8 @@ from tridi.model.ordered_scene.cli import (
     validate_checkpoint, validate_inference_payload,
 )
 from tridi.model.ordered_scene.protocol import FIXED, index_sha256
+from tridi.model.ordered_scene.regularization import contact_local_points
+from tridi.utils.geometry import rotation_6d_to_matrix
 
 
 def conditions():
@@ -232,7 +235,167 @@ class TinyTrainingHeads(nn.Module):
         return dict(test_fixture=True)
 
 
+class TinyContactGeometry:
+    indices = list(range(690))
+    _rotations = staticmethod(rotation_6d_to_matrix)
+
+    def decode(self, shape, human):
+        points = human[..., 312:].unsqueeze(2) + shape[:, None, None, :3]
+        points = points.expand(-1, -1, 690, -1)
+        return points, points
+
+
+class OrderedContactLossContract(unittest.TestCase):
+    def test_disabled_contact_loss_preserves_original_loss_and_rng(self):
+        model = TinyTrainingHeads(3)
+        truth, cond, clocks = targets(), conditions(), torch.tensor([[0, 200, 999], [700, 0, 0]])
+        signed = dict(truth, contact=truth["contact"] * 2 - 1)
+        outputs = []
+        handle = model.register_forward_hook(lambda _model, _inputs, output: outputs.append(output))
+        try:
+            torch.manual_seed(519)
+            original = diffusion_loss(model, truth, cond, clocks)
+            rng = torch.get_rng_state().clone()
+            expected = reconstruction_loss(outputs[-1], signed)
+            torch.testing.assert_close(original, expected, atol=0, rtol=0)
+            torch.manual_seed(519)
+            with patch.object(pipeline, "relative_contact_loss", side_effect=AssertionError("geometry used")):
+                disabled = diffusion_loss(model, truth, cond, clocks, geometry=object(),
+                    contact_weight=0., target_contact_points=object())
+            torch.testing.assert_close(disabled, original, atol=0, rtol=0)
+            self.assertTrue(torch.equal(rng, torch.get_rng_state()))
+        finally:
+            handle.remove()
+
+    def test_contact_gate_uses_human_and_object_clocks_and_preserves_cache_rows(self):
+        model, truth, cond = RecordingHeads(), targets(), conditions()
+        truth["contact"].fill_(1)
+        geometry = TinyContactGeometry()
+        points = torch.arange(2 * 2 * 2 * 690 * 3).reshape(2, 2, 2, 690, 3).float()
+        clocks = torch.tensor([[250, 250, 999], [0, 251, 0]])
+        noise = {key: torch.zeros_like(value) for key, value in truth.items()}
+        base = diffusion_loss(model, truth, cond, clocks, noise=noise)
+        with patch.object(pipeline, "relative_contact_loss", return_value=torch.tensor(3.)) as contact:
+            regularized = diffusion_loss(model, truth, cond, clocks, noise=noise, geometry=geometry,
+                contact_weight=.2, target_contact_points=points)
+        torch.testing.assert_close(regularized, base + .6, atol=0, rtol=0)
+        self.assertEqual(len(contact.call_args.args[1]["human"]), 1)
+        torch.testing.assert_close(contact.call_args.kwargs["target_points"], points[:1])
+        self.assertTrue((contact.call_args.args[2]["contact"] > 0).all())
+        with patch.object(pipeline, "relative_contact_loss", side_effect=AssertionError("inactive geometry used")):
+            inactive = clocks.clone()
+            inactive[0, 0] = 251
+            diffusion_loss(model, truth, cond, inactive, noise=noise, geometry=geometry, contact_weight=.2)
+            truth["contact"].zero_()
+            diffusion_loss(model, truth, cond, clocks, noise=noise, geometry=geometry, contact_weight=.2)
+        for weight in [-1., float("inf"), float("nan"), True]:
+            with self.assertRaisesRegex(ValueError, "contact_weight"):
+                diffusion_loss(model, truth, cond, clocks, contact_weight=weight)
+        for maximum in [-1, 1000, 250., True]:
+            with self.assertRaisesRegex(ValueError, "contact_max_timestep"):
+                diffusion_loss(model, truth, cond, clocks, contact_max_timestep=maximum)
+        with self.assertRaisesRegex(ValueError, "geometry"):
+            diffusion_loss(model, truth, cond, clocks, contact_weight=.1)
+
+    def test_relative_contact_loss_has_real_shape_human_and_object_gradients(self):
+        truth, cond, geometry = targets(), conditions(), TinyContactGeometry()
+        truth["contact"].fill_(1)
+        model = RecordingHeads()
+        model.states = nn.ParameterDict({key: nn.Parameter(value.clone()) for key, value in truth.items()})
+        with torch.no_grad():
+            model.states["shape"][:, :3] += .03
+            model.states["human"][..., 312:] += .02
+            model.states["object_pose"][..., 6:] -= .01
+        model.forward = lambda **_batch: dict(model.states.items())
+        noise = {key: torch.zeros_like(value) for key, value in truth.items()}
+        clocks = torch.tensor([0, 250])
+        base = diffusion_loss(model, truth, cond, clocks, noise=noise)
+        with torch.no_grad():
+            cached = contact_local_points(geometry, truth)
+        regularized = diffusion_loss(model, truth, cond, clocks, noise=noise, geometry=geometry,
+            contact_weight=.1, target_contact_points=cached)
+        self.assertGreater(float((regularized - base).detach()), 0.)
+        (regularized - base).backward()
+        for key in ("shape", "human", "object_pose"):
+            grad = model.states[key].grad
+            self.assertTrue(torch.isfinite(grad).all())
+            self.assertGreater(float(grad.abs().sum()), 0., key)
+        self.assertEqual(float(model.states["contact"].grad.abs().sum()), 0.)
+
+
 class OrderedTrainingContract(unittest.TestCase):
+    def test_relation_weak_version_is_explicit_in_data_and_checkpoint(self):
+        data = training_fixture()
+        for row in data["metadata"]:
+            row.update(action_annotation="weak_temporal_v2", review_status="machine_checked",
+                weak_labeling=dict(algorithm="weak_temporal_v2", thresholds={"distance_m": .05},
+                evidence={"relation": "approach_other_object"}))
+        with self.assertRaises(ValueError):
+            validate_training_data(data)
+        self.assertEqual(validate_training_data(data, allow_weak=True), 4)
+        inconsistent = deepcopy(data)
+        inconsistent["metadata"][0]["weak_labeling"]["algorithm"] = "weak_temporal_v1"
+        with self.assertRaises(ValueError):
+            validate_training_data(inconsistent, allow_weak=True)
+        saved = dict(schema=cli.CHECKPOINT_SCHEMA, model_profile="root_affine_v1", data_validated=True,
+            training_steps=1, supervision="weak_temporal_v2", vocabulary=data["vocabulary"],
+            num_actions=len(data["vocabulary"]), descriptor_dim=12, representation=data["representation"])
+        self.assertIs(validate_checkpoint(saved), saved)
+
+    def test_contact_cache_uses_only_training_rows_before_model_seed(self):
+        data = training_fixture()
+        for row, split in zip(data["metadata"], ["train", "val", "train", "val"]):
+            row["split"] = split
+        data["targets"]["shape"][:, 0] = torch.tensor([10., 20., 30., 40.])
+        decoded, instances, batches = [], [], []
+
+        class CacheGeometry(TinyContactGeometry):
+            def __init__(self, *args, **kwargs):
+                instances.append(kwargs)
+                torch.rand(17)  # Geometry construction must precede the model seed.
+
+            def decode(self, shape, human):
+                self_test.assertFalse(torch.is_grad_enabled())
+                decoded.extend(shape[:, 0].tolist())
+                return super().decode(shape, human)
+
+        self_test = self
+        original = diffusion_loss
+
+        def checked_loss(model, truth, cond, clocks, **kwargs):
+            self.assertEqual(kwargs["contact_weight"], .2)
+            expected = contact_local_points(TinyContactGeometry(), truth)
+            torch.testing.assert_close(kwargs["target_contact_points"], expected, atol=0, rtol=0)
+            batches.append(truth["shape"][:, 0].tolist())
+            return original(model, truth, cond, clocks, scales=kwargs["scales"])
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            torch.save(data, root / "data.pth")
+            args = SimpleNamespace(data=root / "data.pth", output=root / "baseline", steps=2,
+                batch_size=2, lr=1e-3, initialization_checkpoint=None, seed=71, device="cpu",
+                eval_every=2, eval_steps=2, max_val_samples=1, log_every=1)
+            fake_module = SimpleNamespace(NativeSceneGeometry=CacheGeometry)
+            with patch.object(cli, "OrderedSceneDenoiser", TinyTrainingHeads), redirect_stdout(StringIO()):
+                cli.train(args)
+                baseline = torch.load(args.output / "last.pth", weights_only=False)
+                args.output, args.contact_weight = root / "contact", .2
+                args.models_root, args.meshes_root = root / "models", root / "meshes"
+                with patch.dict("sys.modules", {"tridi.model.ordered_scene.geometry": fake_module}), \
+                        patch.object(cli, "diffusion_loss", side_effect=checked_loss):
+                    cli.train(args)
+                trained = torch.load(args.output / "last.pth", weights_only=False)
+                best = torch.load(args.output / "best.pth", weights_only=False)
+            self.assertEqual(decoded, [10., 30.])
+            self.assertEqual(len(instances), 1)
+            self.assertEqual(instances[0]["representation"], data["representation"])
+            self.assertEqual(len(batches), 2)
+            self.assertEqual(trained["train_settings"]["contact_weight"], .2)
+            self.assertEqual(best["contact_regularization"]["max_timestep"], 250)
+            for key in baseline["model"]:
+                self.assertTrue(torch.equal(baseline["model"][key], trained["model"][key]))
+            self.assertTrue(torch.equal(baseline["torch_rng_state"], trained["torch_rng_state"]))
+
     def test_checkpoint_profile_is_explicit_and_legacy_cannot_claim_affine(self):
         saved = dict(schema=CHECKPOINT_SCHEMA, data_validated=True, training_steps=1,
             supervision="human_verified", model_profile="root_affine_v1", representation=representation(),
@@ -354,6 +517,14 @@ class OrderedTrainingContract(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "identical data"):
                     cli.train(args)
                 args.model_profile = "legacy"
+                args.contact_max_timestep = 249
+                with self.assertRaisesRegex(ValueError, "identical data"):
+                    cli.train(args)
+                args.contact_max_timestep = 250
+                args.contact_weight, args.models_root, args.meshes_root = .1, root / "models", root / "meshes"
+                with self.assertRaisesRegex(ValueError, "identical data"):
+                    cli.train(args)
+                args.contact_weight = 0.
                 data["conditions"]["descriptors"][0, 0, 0] += .1
                 torch.save(data, path)
                 with self.assertRaisesRegex(ValueError, "identical data"):

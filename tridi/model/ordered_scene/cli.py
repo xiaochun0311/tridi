@@ -12,9 +12,9 @@ import torch
 from .model import MODEL_PROFILES, OrderedSceneDenoiser
 from .pipeline import (
     STATE, diffusion_loss, reconstruction_loss, sample, sample_tri_timesteps,
-    validate_conditions, validate_training_data,
+    validate_conditions, validate_contact_settings, validate_training_data,
 )
-from .protocol import assert_same_representation, validate_representation
+from .protocol import WEAK_SUPERVISIONS, assert_same_representation, validate_representation
 
 
 CHECKPOINT_SCHEMA = "tridi-himo-ordered-v3"
@@ -42,7 +42,7 @@ def checkpoint_model_profile(saved):
 def validate_checkpoint(saved):
     if (not isinstance(saved, dict) or saved.get("schema") not in {CHECKPOINT_SCHEMA, LEGACY_CHECKPOINT_SCHEMA}
             or saved.get("data_validated") is not True
-            or saved.get("supervision") not in {"human_verified", "weak_temporal_v1"}
+            or saved.get("supervision") not in {"human_verified"} | WEAK_SUPERVISIONS
             or type(saved.get("training_steps")) is not int or saved["training_steps"] < 1):
         raise ValueError("Requires a trained native HIMO checkpoint; legacy, diagnostic and untrained weights are incompatible")
     checkpoint_model_profile(saved)
@@ -86,7 +86,10 @@ def validate_inference_payload(saved, payload):
 def train(args):
     data = torch.load(args.data, map_location="cpu", weights_only=False)
     validate_training_data(data, allow_weak=getattr(args, "allow_weak", False))
-    supervision = "weak_temporal_v1" if any(row["action_annotation"] == "weak_temporal_v1" for row in data["metadata"]) else "human_verified"
+    versions = {row["action_annotation"] for row in data["metadata"] if row["action_annotation"] in WEAK_SUPERVISIONS}
+    if len(versions) > 1:
+        raise ValueError("A training run must use one explicit weak-label version")
+    supervision = next(iter(versions)) if versions else "human_verified"
     indices = {split: [i for i, row in enumerate(data["metadata"]) if row["split"] == split]
                for split in ["train", "val", "test"]}
     if not indices["train"] or not indices["val"] or args.steps < 1:
@@ -101,8 +104,17 @@ def train(args):
     model_profile = getattr(args, "model_profile", "legacy")
     if model_profile not in MODEL_PROFILES:
         raise ValueError("Unknown model_profile")
+    contact_weight = getattr(args, "contact_weight", 0.)
+    contact_max_timestep = getattr(args, "contact_max_timestep", 250)
+    validate_contact_settings(contact_weight, contact_max_timestep)
+    models_root, meshes_root = getattr(args, "models_root", None), getattr(args, "meshes_root", None)
+    if contact_weight > 0 and (models_root is None or meshes_root is None):
+        raise ValueError("Positive contact_weight requires models_root and meshes_root")
     settings = dict(batch_size=args.batch_size, lr=args.lr, seed=args.seed, device=str(args.device),
         model_profile=model_profile,
+        contact_weight=contact_weight, contact_max_timestep=contact_max_timestep,
+        models_root=str(models_root) if contact_weight > 0 else None,
+        meshes_root=str(meshes_root) if contact_weight > 0 else None,
         training_protocol="tri_sparse_x0_l1_balanced_mse_v1",
         weight_decay=getattr(args, "weight_decay", 1e-6), betas=list(getattr(args, "betas", (.95, .999))),
         eval_every=getattr(args, "eval_every", 200), eval_steps=getattr(args, "eval_steps", 20),
@@ -126,6 +138,9 @@ def train(args):
         validate_checkpoint(saved)
         saved_settings = dict(saved.get("train_settings", {}))
         saved_settings.setdefault("model_profile", checkpoint_model_profile(saved))
+        for key, default in dict(contact_weight=0., contact_max_timestep=250,
+                                 models_root=None, meshes_root=None).items():
+            saved_settings.setdefault(key, default)
         if (saved.get("checkpoint_kind") != "last" or saved.get("data_sha256") != data_sha
                 or saved.get("supervision") != supervision or saved_settings != settings
                 or checkpoint_model_profile(saved) != model_profile
@@ -135,6 +150,19 @@ def train(args):
         assert_same_representation(saved["representation"], data["representation"])
         if saved["training_steps"] >= args.steps:
             raise ValueError("Total steps must exceed the completed resume step")
+    training_geometry, target_contact_cache = None, None
+    if contact_weight > 0:
+        from .geometry import NativeSceneGeometry
+        from .regularization import contact_local_points
+
+        training_geometry = NativeSceneGeometry(models_root, meshes_root, device=args.device,
+            representation=data["representation"])
+        target_contact_cache = {}
+        with torch.no_grad():
+            for start in range(0, len(indices["train"]), min(args.batch_size, 8)):
+                ids = indices["train"][start:start + min(args.batch_size, 8)]
+                points = contact_local_points(training_geometry, subset(data["targets"], ids, args.device)).cpu()
+                target_contact_cache.update(zip(ids, points))
     torch.manual_seed(args.seed)
     model = OrderedSceneDenoiser(len(data["vocabulary"]), checkpoint=None if saved else args.initialization_checkpoint,
         model_profile=model_profile).to(args.device)
@@ -148,6 +176,8 @@ def train(args):
         model=model.manifest(), vocabulary=data["vocabulary"],
         representation=data["representation"], checkpoint_schema=CHECKPOINT_SCHEMA,
         model_profile=model_profile,
+        contact_regularization=dict(loss="relative_contact_v1", weight=contact_weight,
+            max_timestep=contact_max_timestep),
         supervision=supervision, train_settings=settings,
         condition_coverage=coverage,
         conditioning="Only initial object poses/geometry and ordered action references",
@@ -186,8 +216,12 @@ def train(args):
         chosen = torch.randint(len(indices["train"]), (args.batch_size,), generator=generator)
         ids = [indices["train"][i] for i in chosen.tolist()]
         t = sample_tri_timesteps(len(ids), generator=generator)
+        target_contact_points = (torch.stack([target_contact_cache[i] for i in ids]).to(args.device)
+            if target_contact_cache is not None else None)
         loss = diffusion_loss(model, subset(data["targets"], ids, args.device),
-            subset(data["conditions"], ids, args.device), t, scales=scales)
+            subset(data["conditions"], ids, args.device), t, scales=scales,
+            geometry=training_geometry, contact_weight=contact_weight,
+            target_contact_points=target_contact_points, contact_max_timestep=contact_max_timestep)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         norm = torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 5.)
@@ -219,6 +253,7 @@ def train(args):
                     vocabulary=data["vocabulary"], training_steps=step, data_validated=True,
                     representation=data["representation"], supervision=supervision,
                     condition_coverage=coverage,
+                    train_settings=settings, contact_regularization=protocol["contact_regularization"],
                     training_seed=args.seed, initialization=protocol["model"],
                     validation_score=score, data_sha256=data_sha))
             save_json(args.output / "history.json", history)
@@ -238,6 +273,7 @@ def train(args):
                 vocabulary=data["vocabulary"], training_steps=step, data_validated=True,
                 representation=data["representation"], supervision=supervision, data_sha256=data_sha,
                 condition_coverage=coverage,
+                contact_regularization=protocol["contact_regularization"],
                 training_seed=args.seed, initialization=protocol["model"],
                 train_settings=settings, protocol=protocol, best_score=best, history=history,
                 generator_state=generator.get_state(), torch_rng_state=torch.get_rng_state(),
@@ -295,6 +331,10 @@ def main():
     fit.add_argument("--weight-decay", default=1e-6, type=float)
     fit.add_argument("--betas", default=(.95, .999), nargs=2, type=float)
     fit.add_argument("--model-profile", choices=MODEL_PROFILES, default="legacy")
+    fit.add_argument("--contact-weight", default=0., type=float)
+    fit.add_argument("--contact-max-timestep", default=250, type=int)
+    fit.add_argument("--models-root", type=Path)
+    fit.add_argument("--meshes-root", type=Path)
     gen = commands.add_parser("sample")
     gen.add_argument("--conditions", required=True, type=Path)
     gen.add_argument("--checkpoint", required=True, type=Path)

@@ -14,6 +14,7 @@ from .evaluate import rotation_error_degrees, scene_metrics
 from .geometry import NativeSceneGeometry
 from .model import OrderedSceneDenoiser
 from .pipeline import CONDITIONS, STATE, diffusion_loss, sample, sample_tri_timesteps, scheduler, validate_training_data
+from .regularization import contact_local_points
 
 
 SCHEMA = "himo-smallfit-diagnostic-v1"
@@ -181,8 +182,15 @@ def run(args):
         raise ValueError("Steps, batch size and evaluation interval must be positive; DDIM steps must be 1..1000")
     if not math.isfinite(args.lr) or args.lr <= 0:
         raise ValueError("Learning rate must be positive")
-    if args.export_count < 0 or args.loss_profile != "baseline" or args.model_profile not in {"legacy", "root_affine_v1"}:
-        raise ValueError("Export count must be nonnegative; only baseline loss and declared model profiles are supported")
+    if args.export_count < 0 or args.model_profile not in {"legacy", "root_affine_v1"}:
+        raise ValueError("Export count must be nonnegative; use a declared model profile")
+    if (args.loss_profile not in {"baseline", "relative_contact_v1"} or
+            not math.isfinite(args.contact_weight) or args.contact_weight < 0 or
+            (args.loss_profile == "baseline" and args.contact_weight != 0) or
+            (args.loss_profile == "relative_contact_v1" and args.contact_weight <= 0)):
+        raise ValueError("Baseline requires contact weight 0; relative_contact_v1 requires a finite positive contact weight")
+    if type(args.contact_max_timestep) is not int or not 0 <= args.contact_max_timestep < 1000:
+        raise ValueError("Contact maximum timestep must be an integer in [0, 1000)")
     if args.output.exists() and args.resume is None:
         raise ValueError("Use a new diagnostic output directory")
     data = torch.load(args.data, map_location="cpu", weights_only=False)
@@ -202,7 +210,9 @@ def run(args):
     settings = dict(data_sha256=hashlib.sha256(args.data.read_bytes()).hexdigest(), indices=indices,
         seed=args.seed, batch_size=args.batch_size, device=args.device, lr=args.lr,
         eval_every=args.eval_every, sampling_steps=args.sampling_steps, loss_profile=args.loss_profile,
-        model_profile=args.model_profile,
+        model_profile=args.model_profile, contact_weight=args.contact_weight,
+        contact_max_timestep=args.contact_max_timestep,
+        contact_gating="max(human_timestep, object_timestep) <= contact_max_timestep",
         loss_scale_source="all original train records; no val/test", optimizer="AdamW", weight_decay=1e-6, betas=[.95, .999])
     saved = None
     if args.resume is not None:
@@ -210,6 +220,12 @@ def run(args):
         if (saved.get("schema") != SCHEMA or saved.get("settings") != settings or
                 Path(args.resume).resolve().parent != args.output.resolve() or saved["step"] >= args.steps):
             raise ValueError("Resume requires the same diagnostic settings, output directory and a larger total step budget")
+    training_geometry, contact_points = None, None
+    if args.contact_weight > 0:
+        training_geometry = NativeSceneGeometry(args.models_root, args.meshes_root,
+            device=args.device, representation=data["representation"])
+        with torch.no_grad():
+            contact_points = contact_local_points(training_geometry, targets).detach()
     torch.manual_seed(args.seed)
     model_args = dict(checkpoint=None if saved else args.init_checkpoint)
     if args.model_profile != "legacy":
@@ -248,11 +264,14 @@ def run(args):
         clocks = sample_tri_timesteps(len(ids), generator=generator)
         checked = step == 1 or step % args.eval_every == 0 or step == args.steps
         optimizer.zero_grad(set_to_none=True)
+        loss_args = dict(scales=scales, geometry=training_geometry, contact_weight=args.contact_weight,
+            target_contact_points=contact_points[ids] if contact_points is not None else None,
+            contact_max_timestep=args.contact_max_timestep)
         if checked:
             with observe_translation_heads(model) as training_activations:
-                loss = diffusion_loss(model, subset(targets, ids, args.device), subset(conditions, ids, args.device), clocks, scales=scales)
+                loss = diffusion_loss(model, subset(targets, ids, args.device), subset(conditions, ids, args.device), clocks, **loss_args)
         else:
-            loss = diffusion_loss(model, subset(targets, ids, args.device), subset(conditions, ids, args.device), clocks, scales=scales)
+            loss = diffusion_loss(model, subset(targets, ids, args.device), subset(conditions, ids, args.device), clocks, **loss_args)
         loss.backward()
         gradients = gradient_statistics(model) if checked else None
         norm = torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 5.)
@@ -312,7 +331,9 @@ def main():
     parser.add_argument("--eval-every", type=int, default=200)
     parser.add_argument("--sampling-steps", type=int, default=40)
     parser.add_argument("--export-count", type=int, default=2)
-    parser.add_argument("--loss-profile", choices=["baseline"], default="baseline")
+    parser.add_argument("--loss-profile", choices=["baseline", "relative_contact_v1"], default="baseline")
+    parser.add_argument("--contact-weight", type=float, default=0.)
+    parser.add_argument("--contact-max-timestep", type=int, default=250)
     parser.add_argument("--model-profile", choices=["legacy", "root_affine_v1"], default="legacy")
     parser.add_argument("--allow-weak", action="store_true")
     parser.add_argument("--resume", type=Path)

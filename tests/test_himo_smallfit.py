@@ -1,14 +1,20 @@
+from contextlib import redirect_stdout
+import io
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 import torch
 from torch import nn
 
 from tridi.model.denoising.transformer_uni_3 import Projection
+from tridi.model.ordered_scene import smallfit
 from tridi.model.ordered_scene.cli import validate_checkpoint
 from tridi.model.ordered_scene.pipeline import CONDITIONS, STATE, STATE_SHAPES
 from tridi.model.ordered_scene.smallfit import (SCHEMA, activation_statistics, denoise_once,
-    gradient_statistics, normalized_body_errors, observe_translation_heads, select_train_indices)
+    gradient_statistics, normalized_body_errors, observe_translation_heads, run, select_train_indices)
 
 
 def fixture():
@@ -41,6 +47,71 @@ class TinyHeads(nn.Module):
 
 
 class SmallfitDiagnosticTest(unittest.TestCase):
+    def test_contact_profile_constraints_fail_before_loading_data(self):
+        base = dict(steps=1, batch_size=4, eval_every=1, sampling_steps=40, lr=1e-4,
+            export_count=0, model_profile="root_affine_v1", loss_profile="baseline",
+            contact_weight=0., contact_max_timestep=250)
+        for invalid in (dict(contact_weight=.1), dict(loss_profile="relative_contact_v1"),
+                dict(loss_profile="other"), dict(contact_weight=float("nan")),
+                dict(contact_weight=-.1), dict(contact_max_timestep=-1),
+                dict(contact_max_timestep=1000), dict(contact_max_timestep=2.5)):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                run(SimpleNamespace(**(base | invalid)))
+
+    def test_contact_cache_tracks_sampled_targets_and_baseline_builds_no_training_geometry(self):
+        data = fixture() | dict(representation={}, vocabulary=["a", "b", "c"])
+        initial_weights, batches, random_draws = [], [], []
+        for weight, profile in ((0., "baseline"), (.1, "relative_contact_v1")):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as directory:
+                folder = Path(directory)
+                torch.save(data, folder / "data.pth")
+                args = SimpleNamespace(data=folder / "data.pth", init_checkpoint=folder / "init.pth",
+                    models_root=folder, meshes_root=folder, output=folder / "out", resume=None,
+                    steps=1, batch_size=4, scenes=4, eval_every=1, sampling_steps=40, seed=42,
+                    device="cpu", lr=1e-4, export_count=0, model_profile="root_affine_v1",
+                    loss_profile=profile, contact_weight=weight, contact_max_timestep=250, allow_weak=True)
+                geometry = Mock()
+                geometry.decode.return_value = (None, torch.zeros(4, 2, 52, 3))
+                geometry.contacts.side_effect = lambda shape, *unused: torch.zeros(len(shape), 2, 2, 690)
+                def build_geometry(*unused, **kwargs):
+                    torch.rand(1)  # Extra geometry setup must not shift model/training RNG.
+                    return geometry
+                def build_model(*unused, **kwargs):
+                    model = TinyHeads()
+                    model.manifest = lambda: {}
+                    initial_weights.append(next(model.parameters()).detach().clone())
+                    return model
+                def cache(_geometry, state):
+                    self.assertFalse(torch.is_grad_enabled())
+                    torch.rand(1)
+                    return state["shape"][:, :1, None, None, None].expand(-1, 2, 2, 690, 3)
+                def loss(_model, targets, conditions, clocks, **kwargs):
+                    batches.append((targets["shape"].clone(), clocks.clone()))
+                    random_draws.append(torch.randn(3))
+                    self.assertEqual(kwargs["contact_weight"], weight)
+                    self.assertEqual(kwargs["contact_max_timestep"], 250)
+                    if weight:
+                        self.assertIs(kwargs["geometry"], geometry)
+                        torch.testing.assert_close(kwargs["target_contact_points"][:, 0, 0, 0, 0], targets["shape"][:, 0])
+                    else:
+                        self.assertIsNone(kwargs["geometry"])
+                        self.assertIsNone(kwargs["target_contact_points"])
+                    return next(_model.parameters()).square().mean()
+                def assess(_model, targets, *unused):
+                    return {"ddim_generation": {"object_translation_mm": 1.}}, {}, {"ddim_generation": targets}
+                with patch.object(smallfit, "validate_training_data"), patch.object(smallfit, "NativeSceneGeometry", side_effect=build_geometry) as build, \
+                        patch.object(smallfit, "OrderedSceneDenoiser", side_effect=build_model), patch.object(smallfit, "assess", side_effect=assess), \
+                        patch.object(smallfit, "contact_local_points", side_effect=cache) as precompute, \
+                        patch.object(smallfit, "diffusion_loss", side_effect=loss) as train_loss, redirect_stdout(io.StringIO()):
+                    report = run(args)
+                self.assertEqual(build.call_count, 2 if weight else 1)
+                self.assertEqual(precompute.call_count, 1 if weight else 0)
+                self.assertEqual(train_loss.call_count, 1)
+                self.assertEqual(report["settings"]["contact_weight"], weight)
+                self.assertEqual(report["settings"]["contact_max_timestep"], 250)
+        for first, second in ((initial_weights[0], initial_weights[1]), (random_draws[0], random_draws[1]), *zip(batches[0], batches[1])):
+            torch.testing.assert_close(first, second, rtol=0, atol=0)
+
     def test_selection_is_repeatable_train_only_and_rejects_conflicting_conditions(self):
         data = fixture()
         # Rows 0/6 have one identical condition but contradicting recorded futures.

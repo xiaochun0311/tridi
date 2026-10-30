@@ -3,12 +3,14 @@
 Training contacts are binary; denoising and sampling use signed contact scores.
 Metadata declarations require a separate source audit, not just this schema check.
 """
-from numbers import Integral
+import math
+from numbers import Integral, Real
 
 import torch
 from diffusers import DDIMScheduler
 
-from .protocol import validate_representation
+from .protocol import WEAK_SUPERVISIONS, validate_representation
+from .regularization import relative_contact_loss
 
 
 STATE = ("shape", "human", "object_pose", "contact")
@@ -102,14 +104,14 @@ def validate_training_data(data, descriptor_dim=12, allow_weak=False):
             if not isinstance(row.get(key), str) or not row[key].strip():
                 raise ValueError(f"Each source record requires {key}")
         human = row.get("action_annotation") == "verified" and row.get("review_status") == "accepted_by_human"
-        weak = (allow_weak and row.get("action_annotation") == "weak_temporal_v1"
+        weak = (allow_weak and row.get("action_annotation") in WEAK_SUPERVISIONS
                 and row.get("review_status") == "machine_checked")
         if (row.get("status") == "pending" or row.get("two_task_objects") is not True
                 or row.get("provenance") != "recorded" or not (human or weak)):
-            raise ValueError("Requires recorded two-task-object sequences with human-verified labels or explicitly allowed weak_temporal_v1 labels")
+            raise ValueError("Requires recorded two-task-object sequences with human-verified labels or explicitly allowed versioned weak labels")
         if weak:
             evidence = row.get("weak_labeling")
-            if (not isinstance(evidence, dict) or evidence.get("algorithm") != "weak_temporal_v1"
+            if (not isinstance(evidence, dict) or evidence.get("algorithm") != row["action_annotation"]
                     or not isinstance(evidence.get("thresholds"), dict) or not evidence["thresholds"]
                     or not isinstance(evidence.get("evidence"), dict) or not evidence["evidence"]):
                 raise ValueError("Weak labels require their algorithm, thresholds and nonempty evidence")
@@ -180,8 +182,21 @@ def reconstruction_loss(prediction, target, scales=None):
     return body + objects + contacts
 
 
-def diffusion_loss(model, targets, conditions, t, noise=None, scales=None):
+def validate_contact_settings(contact_weight, contact_max_timestep):
+    if (not isinstance(contact_weight, Real) or isinstance(contact_weight, bool)
+            or not math.isfinite(contact_weight) or contact_weight < 0):
+        raise ValueError("contact_weight must be finite and nonnegative")
+    if (not isinstance(contact_max_timestep, Integral) or isinstance(contact_max_timestep, bool)
+            or not 0 <= contact_max_timestep < 1000):
+        raise ValueError("contact_max_timestep must be an integer in [0, 999]")
+
+
+def diffusion_loss(model, targets, conditions, t, noise=None, scales=None, geometry=None,
+                   contact_weight=0., target_contact_points=None, contact_max_timestep=250):
     """Denoise native human, future objects and contacts with separate clocks."""
+    validate_contact_settings(contact_weight, contact_max_timestep)
+    if contact_weight > 0 and geometry is None:
+        raise ValueError("Positive contact_weight requires training geometry")
     batch, cond, parameter = _model_conditions(model, conditions)
     _validate_state(targets, batch, "targets")
     if not isinstance(t, torch.Tensor) or tuple(t.shape) not in {(batch,), (batch, 3)}:
@@ -205,4 +220,18 @@ def diffusion_loss(model, targets, conditions, t, noise=None, scales=None):
     noisy = {key: schedule.add_noise(value, noise[key], clock[key]) for key, value in target.items()}
     prediction = model(**noisy, **cond, t=t)
     _validate_state(prediction, batch, "prediction")
-    return reconstruction_loss(prediction, target, scales)
+    loss = reconstruction_loss(prediction, target, scales)
+    if contact_weight == 0:
+        return loss
+    active = times[:, :2].amax(-1) <= contact_max_timestep
+    if not bool(active.any()) or not bool((target["contact"][active] > 0).any()):
+        return loss
+    selected_prediction = {key: value[active] for key, value in prediction.items()}
+    selected_target = {key: value[active] for key, value in target.items()}
+    if target_contact_points is not None:
+        expected = (batch, 2, 2, len(geometry.indices), 3)
+        if not isinstance(target_contact_points, torch.Tensor) or tuple(target_contact_points.shape) != expected:
+            raise ValueError("Cached GT local points must match the full training batch")
+        target_contact_points = target_contact_points[active.to(target_contact_points.device)]
+    return loss + contact_weight * relative_contact_loss(
+        geometry, selected_prediction, selected_target, target_points=target_contact_points)

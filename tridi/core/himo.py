@@ -10,7 +10,7 @@ from tridi.model.ordered_scene import cli
 from tridi.model.ordered_scene.geometry import NativeSceneGeometry
 from tridi.model.ordered_scene.model import OrderedSceneDenoiser
 from tridi.model.ordered_scene.pipeline import diffusion_loss, sample, validate_training_data
-from tridi.model.ordered_scene.protocol import assert_same_representation
+from tridi.model.ordered_scene.protocol import WEAK_SUPERVISIONS, assert_same_representation
 
 
 def save_json(path, value):
@@ -70,9 +70,9 @@ def run_himo(cfg):
     job = cfg.run.job
     prepared = Path(cfg.himo.prepared_data)
     device = "cpu" if cfg.run.cpu else "cuda"
-    if cfg.himo.supervision not in {"human_verified", "weak_temporal_v1"}:
-        raise ValueError("himo.supervision must be human_verified or weak_temporal_v1")
-    allow_weak = cfg.himo.supervision == "weak_temporal_v1"
+    if cfg.himo.supervision not in {"human_verified"} | WEAK_SUPERVISIONS:
+        raise ValueError("himo.supervision must be human_verified or a supported weak-label version")
+    allow_weak = cfg.himo.supervision in WEAK_SUPERVISIONS
     if job == "inspect":
         report = data_io.inspect(Path(cfg.himo.root), cfg.himo.annotations)
         save_json(out / "himo_inspection.json", report)
@@ -95,7 +95,9 @@ def run_himo(cfg):
             eval_every=cfg.himo.eval_every, eval_steps=cfg.himo.eval_steps,
             max_val_samples=cfg.himo.max_val_samples, log_every=cfg.himo.log_every,
             weight_decay=cfg.optimizer.weight_decay, betas=tuple(cfg.optimizer.kwargs.get("betas", (.95, .999))),
-            model_profile=cfg.himo.model_profile))
+            model_profile=cfg.himo.model_profile, contact_weight=cfg.himo.contact_weight,
+            contact_max_timestep=cfg.himo.contact_max_timestep,
+            models_root=Path(cfg.env.smpl_folder), meshes_root=Path(cfg.himo.root) / "object_mesh"))
     elif job == "conditions":
         values = torch.load(prepared, map_location="cpu", weights_only=False)
         validate_training_data(values, allow_weak=allow_weak)

@@ -17,3 +17,5 @@ class HimoConfig:
     max_val_samples: int = 32
     log_every: int = 50
     model_profile: str = "legacy"
+    contact_weight: float = 0.0
+    contact_max_timestep: int = 250
